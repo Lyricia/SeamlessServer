@@ -18,6 +18,8 @@ using namespace chrono;
 
 sf::TcpSocket g_socket;
 
+enum E_STATUS { SERVER_SELECT, INGAME };
+
 constexpr auto SCREEN_WIDTH = 19;
 constexpr auto SCREEN_HEIGHT = 19;
 
@@ -41,9 +43,12 @@ private:
 	char m_mess[MAX_STR_LEN];
 	high_resolution_clock::time_point m_time_out;
 	sf::Text m_text;
+	sf::Text m_nameboard;
 
 public:
 	int m_x, m_y;
+	char m_name[100]{};
+
 	OBJECT(sf::Texture& t, int x, int y, int x2, int y2) {
 		m_showing = false;
 		m_sprite.setTexture(t);
@@ -75,16 +80,33 @@ public:
 		m_x = x;
 		m_y = y;
 	}
+	sf::Vector2f GetPos() {
+		float rx = (m_x - g_left_x) * 65.0f + 8;
+		float ry = (m_y - g_top_y) * 65.0f + 8;
+		return sf::Vector2f{rx, ry};
+	}
+
+	void NameboardSetting() {
+		m_nameboard.setFont(g_font);
+		m_nameboard.setString(m_name);
+		m_nameboard.setCharacterSize(40);
+		m_nameboard.setStyle(sf::Text::Bold);
+	}
+
 	void draw() {
 		if (false == m_showing) return;
 		float rx = (m_x - g_left_x) * 65.0f + 8;
 		float ry = (m_y - g_top_y) * 65.0f + 8;
+		
 		m_sprite.setPosition(rx, ry);
 		g_window->draw(m_sprite);
 		if (high_resolution_clock::now() < m_time_out) {
 			m_text.setPosition(rx - 10, ry - 10);
 			g_window->draw(m_text);
 		}
+
+		m_nameboard.setPosition(sf::Vector2f{ rx - 10, ry + 30 });
+		g_window->draw(m_nameboard);
 	}
 	void add_chat(char chat[]) {
 		m_text.setFont(g_font);
@@ -123,7 +145,7 @@ void client_finish()
 	delete board;
 	delete pieces;
 }
-#pragma optimize("", off)
+#pragma optimize("gpsy", off)
 void ProcessPacket(char* ptr)
 {
 	static bool first_time = true;
@@ -136,6 +158,7 @@ void ProcessPacket(char* ptr)
 		avatar.move(my_packet->x, my_packet->y);
 		g_left_x = my_packet->x - (SCREEN_WIDTH / 2);
 		g_top_y = my_packet->y - (SCREEN_HEIGHT / 2);
+		
 		avatar.show();
 		break;
 	}
@@ -146,6 +169,7 @@ void ProcessPacket(char* ptr)
 		int id = my_packet->id;
 
 		if (id == g_myid) {
+			sprintf_s(avatar.m_name, my_packet->name);
 			avatar.move(my_packet->x, my_packet->y);
 			g_left_x = my_packet->x - (SCREEN_WIDTH / 2);
 			g_top_y = my_packet->y - (SCREEN_HEIGHT / 2);
@@ -285,39 +309,81 @@ void send_move_packet(unsigned char dir)
 	send_packet(&m_packet);
 }
 
+bool IsContained(sf::Vector2f lefttop, sf::Vector2f size, sf::Vector2i mouse) {
+	if (mouse.x < lefttop.x || lefttop.x + size.x < mouse.x) return false;
+	if (mouse.y < lefttop.y || lefttop.y + size.y < mouse.y) return false;
+	return true;
+}
 
-int main()
-{
-	int myserver = -1;
-	cout << "choose server : ";
-	cin >> myserver;
-	cout << endl;
+E_STATUS status = E_STATUS::SERVER_SELECT;
 
+void ServerConnect(int serverid) {
 	wcout.imbue(locale("korean"));
-	sf::Socket::Status status = g_socket.connect("127.0.0.1", SERVER_PORT + myserver);
+	sf::Socket::Status sock = g_socket.connect("127.0.0.1", SERVER_PORT + serverid);
 	g_socket.setBlocking(false);
 
-	if (status != sf::Socket::Done) {
+	if (sock != sf::Socket::Done) {
 		wcout << L"서버와 연결할 수 없습니다.\n";
 		while (true);
 	}
-
-	client_initialize();
 
 	cs_packet_login l_packet;
 	l_packet.size = sizeof(l_packet);
 	l_packet.type = C2S_LOGIN;
 	int t_id = GetCurrentProcessId();
-	sprintf_s(l_packet.name, "P%d", t_id);
+	sprintf_s(avatar.m_name, "P%d", t_id);
+	sprintf_s(l_packet.name, avatar.m_name);
 	send_packet(&l_packet);
 
-	sf::RenderWindow window(sf::VideoMode(WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2), "2D CLIENT");
-	g_window = &window;
+	status = INGAME;
 
 	sf::View view = g_window->getView();
 	view.zoom(2.0f);
 	view.move(WINDOW_WIDTH / 4, WINDOW_HEIGHT / 4);
 	g_window->setView(view);
+
+	avatar.NameboardSetting();
+
+	cout << "Server Connected" << endl;
+}
+
+
+int main()
+{
+	int myserver = -1;
+	client_initialize();
+
+	//cout << "choose server : ";
+	//cin >> myserver;
+	//cout << endl;
+	//
+	//wcout.imbue(locale("korean"));
+	//sf::Socket::Status status = g_socket.connect("127.0.0.1", SERVER_PORT + myserver);
+	//g_socket.setBlocking(false);
+	//
+	//if (status != sf::Socket::Done) {
+	//	wcout << L"서버와 연결할 수 없습니다.\n";
+	//	while (true);
+	//}
+	//
+	//
+	//cs_packet_login l_packet;
+	//l_packet.size = sizeof(l_packet);
+	//l_packet.type = C2S_LOGIN;
+	//int t_id = GetCurrentProcessId();
+	//sprintf_s(l_packet.name, "P%d", t_id);
+	//send_packet(&l_packet);
+
+	sf::RenderWindow window(sf::VideoMode(WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2), "2D CLIENT");
+	g_window = &window;
+
+
+	sf::CircleShape shape1(100.0f);
+	sf::CircleShape shape2(100.0f);
+	shape1.setFillColor(sf::Color::Magenta);
+	shape1.setPosition(50, 50);
+	shape2.setFillColor(sf::Color::Magenta);
+	shape2.setPosition(250.0f, 50.0f);
 
 	while (window.isOpen())
 	{
@@ -326,7 +392,7 @@ int main()
 		{
 			if (event.type == sf::Event::Closed)
 				window.close();
-			if (event.type == sf::Event::KeyPressed) {
+			if (status == INGAME && event.type == sf::Event::KeyPressed) {
 				int p_type = -1;
 				switch (event.key.code) {
 				case sf::Keyboard::Left:
@@ -346,14 +412,54 @@ int main()
 					break;
 				}
 			}
+			if (status == SERVER_SELECT && event.type == sf::Event::MouseButtonPressed) {
+				auto mousepos = sf::Vector2i(event.mouseButton.x, event.mouseButton.y);
+
+				shape1.setFillColor(sf::Color::Red);
+				shape2.setFillColor(sf::Color::Red);
+
+				if (IsContained(shape1.getPosition(), sf::Vector2f(shape1.getRadius() * 2, shape1.getRadius() * 2), mousepos)) {
+					shape1.setFillColor(sf::Color::Yellow);
+					myserver = 0;
+					ServerConnect(myserver);
+				}
+				else if (IsContained(shape2.getPosition(), sf::Vector2f(shape2.getRadius() * 2, shape2.getRadius() * 2), mousepos)) {
+					shape2.setFillColor(sf::Color::Yellow);
+					myserver = 1;
+					ServerConnect(myserver);
+				}
+			}
 		}
 
 		window.clear();
-		client_main();
+
+		switch (status) {
+		case SERVER_SELECT: {
+			window.draw(shape1);
+			window.draw(shape2);
+
+			sf::Text text;
+			text.setFont(g_font);
+			text.setPosition(shape1.getPosition() + sf::Vector2f{ 90, 80 });
+			text.setString("0          1");
+
+			window.draw(text);
+			break;
+		}
+		case INGAME: {
+			client_main();
+
+
+			break;
+		}
+		default:
+			break;
+		}
+
 		window.display();
 	}
 	client_finish();
 
 	return 0;
 }
-#pragma optimize("", on)
+#pragma optimize("gpsy", on)
