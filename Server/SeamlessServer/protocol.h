@@ -6,6 +6,8 @@ constexpr int MAX_STR_LEN = 255;
 #define WORLD_WIDTH		20
 #define WORLD_HEIGHT	40
 
+#define VIEW_RANGE		6
+
 #define SERVER_PORT			9000
 #define INTER_SERVER_PORT	9010
 
@@ -18,7 +20,7 @@ constexpr int MAX_STR_LEN = 255;
 #define S2C_LEAVE			4
 
 #define S2S_CONN			100
-#define S2S_DISCONN			101
+#define S2S_CLIENT_DISCONN			101
 #define S2S_CLIENT_CONN		102
 #define S2S_CLIENT_MOVE		103
 

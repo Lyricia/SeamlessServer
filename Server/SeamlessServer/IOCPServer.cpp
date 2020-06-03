@@ -91,6 +91,13 @@ void error_display(const char* msg, int err_no)
 	// while (true);
 }
 
+bool is_near(int a, int b)
+{
+	if (VIEW_RANGE < abs(g_clients[a].x - g_clients[b].x)) return false;
+	if (VIEW_RANGE < abs(g_clients[a].y - g_clients[b].y)) return false;
+	return true;
+}
+
 int getProxyClientID(int id, int serverid) {
 	return id + (serverid * MAX_USER) + SS_ACCEPT_TAG;
 }
@@ -257,13 +264,46 @@ void do_move(int user_id, int direction)
 		cl.m_cl.unlock();
 	}
 
-	ss_packet_client_move p;
-	p.size = sizeof(ss_packet_client_move);
-	p.type = S2S_CLIENT_MOVE;
-	p.clientid = user_id;
-	p.x = u.x;
-	p.y = u.y;
-	send_server_packet(other_server_info.m_socket, &p);
+	if (true == Is_Other_Server_Connected)
+	{
+		// 경계영역에 위치해 있던 경우 버퍼영역을 넘어 완전탈출 전까지 move패킷은 보내주어야함
+		// 만약 경계영역에 새로 진입한 경우 Enter packet도 전송
+		if (true == u.m_IsInBufferSection) {
+			// send move packet
+			ss_packet_client_move p;
+			p.size = sizeof(ss_packet_client_move);
+			p.type = S2S_CLIENT_MOVE;
+			p.clientid = user_id;
+			p.x = u.x;
+			p.y = u.y;
+			send_server_packet(other_server_info.m_socket, &p);
+		}
+		else if (IsInServerBufferSection(u.y)) {	
+			// 새로 경계영역에 완전히 진입한 경우 Enter Packet 전송
+			send_client_creation_to_server(user_id);
+			u.m_IsInBufferSection = true;
+		}
+
+		if (IsOutServerBufferSection(u.y)) {
+			// 버퍼-경계 영역에서 탈출한 경우 leave packet을 타 서버로 전송
+			// send Leave packet
+			ss_packet_disconnect p;
+			p.size = sizeof(p);
+			p.type = S2S_CLIENT_DISCONN;
+			p.clientid = user_id;
+			send_server_packet(other_server_info.m_socket, &p);
+
+			u.m_IsInBufferSection = false;
+		}
+	}
+
+	//ss_packet_client_move p;
+	//p.size = sizeof(ss_packet_client_move);
+	//p.type = S2S_CLIENT_MOVE;
+	//p.clientid = user_id;
+	//p.x = u.x;
+	//p.y = u.y;
+	//send_server_packet(other_server_info.m_socket, &p);
 
 	printf("client [%d]moved [%d]dir : (%d, %d)\n", user_id, direction, u.x, u.y);
 }
@@ -411,7 +451,7 @@ void process_packet(int key, char* buf)
 		printf("other server[%d] client [%d]moved to : (%d, %d)\n", proxycl->m_ServerID, proxycl->m_id, proxycl->x, proxycl->y);
 		break;
 	}
-	case S2S_DISCONN: {
+	case S2S_CLIENT_DISCONN: {
 		ss_packet_disconnect* packet = reinterpret_cast<ss_packet_disconnect*>(buf);
 
 		int proxyid = getProxyClientID(packet->clientid, key);
@@ -450,7 +490,6 @@ void initialize_clients()
 {
 	for (int i = 0; i < MAX_USER; ++i) {
 		g_clients[i].m_id = i;
-
 		g_clients[i].m_status = ST_FREE;
 	}
 }
@@ -471,11 +510,15 @@ void disconnect(int user_id)
 	g_clients[user_id].m_status = ST_FREE;
 	g_clients[user_id].m_cl.unlock();
 
-	ss_packet_disconnect p;
-	p.size = sizeof(p);
-	p.type = S2S_DISCONN;
-	p.clientid = user_id;
-	send_server_packet(other_server_info.m_socket, &p);
+	// 만약 경계영역 내에 있다면 상대 서버에 Disconnect Packet을 보냄
+	if (IsInServerBufferSection(g_clients[user_id].y)) {
+		ss_packet_disconnect p;
+		p.size = sizeof(p);
+		p.type = S2S_CLIENT_DISCONN;
+		p.clientid = user_id;
+		send_server_packet(other_server_info.m_socket, &p);
+		g_clients[user_id].m_IsInBufferSection = false;
+	}
 
 	printf("Client %d disconnected\n", user_id);
 }
@@ -619,7 +662,6 @@ void worker_thread()
 			delete exover;
 			break;
 		case OP_ACCEPT: {
-
 			// Server Connection
 			if (user_id == SS_ACCEPT_TAG) {
 				if (Is_Other_Server_Connected == true) break;
@@ -653,14 +695,16 @@ void worker_thread()
 					nc.m_socket = c_socket;
 					nc.x = rand() % WORLD_WIDTH;
 					//nc.y = rand() % WORLD_HEIGHT;
-					nc.y = (rand() % WORLD_HEIGHT) + (WORLD_HEIGHT * g_my_server_id);
+					//nc.y = (rand() % (WORLD_HEIGHT/2)) + ((WORLD_HEIGHT/2) * g_my_server_id);
+					nc.y = 19 + g_my_server_id;
 					DWORD flags = 0;
 					WSARecv(c_socket, &nc.m_recv_over.wsabuf, 1, NULL, &flags, &nc.m_recv_over.over, NULL);
 
 					if (true == Is_Other_Server_Connected)
-						if (IsInServerBufferSection(nc.y))
+						if (IsInServerBufferSection(nc.y)) {
 							send_client_creation_to_server(user_id);
-
+							nc.m_IsInBufferSection = true;
+						}
 				}
 				c_socket = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
 				exover->c_socket = c_socket;
