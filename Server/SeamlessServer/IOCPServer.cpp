@@ -53,6 +53,7 @@ struct CLIENT : Base_Info {
 	C_STATUS m_status;
 
 	int		m_ServerID = -1;
+	bool	m_IsInBufferSection = false;
 
 	short x, y;
 	char m_name[MAX_ID_LEN + 1];
@@ -71,6 +72,8 @@ SOCKET s_other_server;			// ÀÌ¿ô Zone ServerÀÇ Socket
 bool Is_Other_Server_Connected = false;
 Base_Info other_server_info;
 
+int server_buffer_pos = -1;
+
 
 void error_display(const char* msg, int err_no)
 {
@@ -86,6 +89,30 @@ void error_display(const char* msg, int err_no)
 	LocalFree(lpMsgBuf);
 	std::cout << std::endl;
 	// while (true);
+}
+
+int getProxyClientID(int id, int serverid) {
+	return id + (serverid * MAX_USER) + SS_ACCEPT_TAG;
+}
+
+bool IsInServerBufferSection(int y) {
+	if (g_my_server_id == 0 && y > server_buffer_pos) {
+		return true;
+	}
+	else if (g_my_server_id == 1 && y < server_buffer_pos) {
+		return true;
+	}
+	return false;
+}
+
+bool IsOutServerBufferSection(int y) {
+	if (g_my_server_id == 0 && y < server_buffer_pos) {
+		return true;
+	}
+	else if (g_my_server_id == 1 && y > server_buffer_pos) {
+		return true;
+	}
+	return false;
 }
 
 void send_client_packet(int user_id, void* p)
@@ -109,7 +136,7 @@ void send_client_packet(int user_id, void* p)
 	//}
 }
 
-void send_server_packet(SOCKET& s, void* p) 
+void send_server_packet(SOCKET& s, void* p)
 {
 	char* buf = reinterpret_cast<char*>(p);
 
@@ -303,7 +330,7 @@ void process_packet(int key, char* buf)
 	}
 	case C2S_MOVE: {
 		int user_id = key;
-		if (user_id >= SS_ACCEPT_TAG) break; 
+		if (user_id >= SS_ACCEPT_TAG) break;
 		cs_packet_move* packet = reinterpret_cast<cs_packet_move*>(buf);
 		do_move(user_id, packet->direction);
 		break;
@@ -317,7 +344,8 @@ void process_packet(int key, char* buf)
 	case S2S_CLIENT_CONN: {
 		ss_packet_client_connect* packet = reinterpret_cast<ss_packet_client_connect*>(buf);
 
-		int proxy_id = packet->id + MAX_USER * packet->ownerserverid + SS_ACCEPT_TAG;
+		//int proxy_id = packet->id + MAX_USER * packet->ownerserverid + SS_ACCEPT_TAG;
+		int proxy_id = getProxyClientID(packet->id, packet->ownerserverid);
 		auto nc = new CLIENT;
 
 		//CLIENT& nc = g_clients[packet->id];
@@ -335,7 +363,7 @@ void process_packet(int key, char* buf)
 		nc->m_status = ST_ACTIVE;
 
 		g_proxy_clients[proxy_id] = nc;
-		
+
 		printf("Client %d from %d Server - proxy", nc->m_id, nc->m_ServerID);
 		cout << nc->m_name << " connected\n";
 
@@ -351,8 +379,8 @@ void process_packet(int key, char* buf)
 			if (ST_ACTIVE == g_clients[i].m_status)
 				//if (packet->id != i) {
 					//send_enter_packet(packet->id, i);
-					send_enter_packet(i, proxy_id, true);
-				//}
+				send_enter_packet(i, proxy_id, true);
+			//}
 			g_clients[i].m_cl.unlock();
 		}
 		//g_clients[packet->id].m_cl.unlock();
@@ -362,7 +390,8 @@ void process_packet(int key, char* buf)
 	case S2S_CLIENT_MOVE: {
 		ss_packet_client_move* packet = reinterpret_cast<ss_packet_client_move*>(buf);
 		//int serverid = key;
-		int proxyid = packet->clientid + key * MAX_USER + SS_ACCEPT_TAG;
+		//int proxyid = packet->clientid + key * MAX_USER + SS_ACCEPT_TAG;
+		int proxyid = getProxyClientID(packet->clientid, key);
 
 		auto& proxycl = g_proxy_clients[proxyid];
 
@@ -385,7 +414,8 @@ void process_packet(int key, char* buf)
 	case S2S_DISCONN: {
 		ss_packet_disconnect* packet = reinterpret_cast<ss_packet_disconnect*>(buf);
 
-		int proxyid = packet->clientid + key * MAX_USER + SS_ACCEPT_TAG;
+		int proxyid = getProxyClientID(packet->clientid, key);
+		//int proxyid = packet->clientid + key * MAX_USER + SS_ACCEPT_TAG;
 		auto& cl = g_proxy_clients[proxyid];
 
 		int clientid = packet->clientid;
@@ -622,12 +652,15 @@ void worker_thread()
 					nc.m_recv_over.wsabuf.len = MAX_BUF_SIZE;
 					nc.m_socket = c_socket;
 					nc.x = rand() % WORLD_WIDTH;
-					nc.y = rand() % WORLD_HEIGHT;
+					//nc.y = rand() % WORLD_HEIGHT;
+					nc.y = (rand() % WORLD_HEIGHT) + (WORLD_HEIGHT * g_my_server_id);
 					DWORD flags = 0;
 					WSARecv(c_socket, &nc.m_recv_over.wsabuf, 1, NULL, &flags, &nc.m_recv_over.over, NULL);
 
 					if (true == Is_Other_Server_Connected)
-						send_client_creation_to_server(user_id);
+						if (IsInServerBufferSection(nc.y))
+							send_client_creation_to_server(user_id);
+
 				}
 				c_socket = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
 				exover->c_socket = c_socket;
@@ -654,6 +687,12 @@ int main()
 		while (true);
 	}
 	g_other_server_id = 1 - g_my_server_id;
+
+	if (g_my_server_id == 0)
+		server_buffer_pos = 15;
+	else if (g_my_server_id == 1)
+		server_buffer_pos = 24;
+
 
 
 	g_iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, NULL, 0);
