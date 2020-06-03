@@ -9,7 +9,7 @@ constexpr int MAX_STR_LEN = 255;
 #define SESSION_WIDTH		20
 #define SESSION_HEIGHT		20
 
-#define VIEW_RANGE		6
+#define VIEW_RANGE		5
 
 #define SERVER_PORT			9000
 #define INTER_SERVER_PORT	9010
@@ -58,7 +58,8 @@ struct ss_packet_client_move {
 };
 
 constexpr unsigned char O_PLAYER = 0;
-constexpr unsigned char O_NPC = 1;
+constexpr unsigned char O_PROXY = 1;
+constexpr unsigned char O_NPC = 2;
 
 struct sc_packet_login_ok {
 	char size;
@@ -68,6 +69,7 @@ struct sc_packet_login_ok {
 	short hp;
 	short level;
 	int	exp;
+	int serverid;
 };
 
 // sc_packet_pos

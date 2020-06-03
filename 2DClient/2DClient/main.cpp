@@ -32,6 +32,7 @@ constexpr auto MAX_USER = 10;
 int g_left_x;
 int g_top_y;
 int g_myid;
+int g_myServerId;
 
 sf::RenderWindow* g_window;
 sf::Font g_font;
@@ -47,7 +48,7 @@ private:
 
 public:
 	int m_x, m_y;
-	char m_name[100]{};
+	char m_name[50]{};
 
 	OBJECT(sf::Texture& t, int x, int y, int x2, int y2) {
 		m_showing = false;
@@ -91,6 +92,10 @@ public:
 		m_nameboard.setString(m_name);
 		m_nameboard.setCharacterSize(40);
 		m_nameboard.setStyle(sf::Text::Bold);
+	}
+
+	void setColor(sf::Color c) {
+		m_sprite.setColor(c);
 	}
 
 	void draw() {
@@ -158,6 +163,7 @@ void ProcessPacket(char* ptr)
 		avatar.move(my_packet->x, my_packet->y);
 		g_left_x = my_packet->x - (SCREEN_WIDTH / 2);
 		g_top_y = my_packet->y - (SCREEN_HEIGHT / 2);
+		g_myServerId = my_packet->serverid;
 		
 		avatar.show();
 		break;
@@ -167,7 +173,7 @@ void ProcessPacket(char* ptr)
 	{
 		sc_packet_enter* my_packet = reinterpret_cast<sc_packet_enter*>(ptr);
 		int id = my_packet->id;
-
+		
 		if (id == g_myid) {
 			sprintf_s(avatar.m_name, my_packet->name);
 			avatar.move(my_packet->x, my_packet->y);
@@ -176,10 +182,28 @@ void ProcessPacket(char* ptr)
 			avatar.show();
 		}
 		else {
-			if (my_packet->o_type == O_NPC)
-				npcs[id] = OBJECT{ *pieces, 64, 0, 64, 64 };
-			else
+			auto& cl = npcs[id];
+			
+			sprintf_s(cl.m_name, my_packet->name);
+			switch (my_packet->o_type)
+			{
+			case O_PLAYER:
+				//memcpy(npcs[id].m_name, tmp, 50);
 				npcs[id] = OBJECT{ *pieces, 0, 0, 64, 64 };
+				npcs[id].setColor(sf::Color::Yellow);
+				npcs[id].NameboardSetting();
+				break;
+			case O_PROXY:
+				memcpy(npcs[id].m_name, my_packet->name, 50);
+				npcs[id] = OBJECT{ *pieces, 64, 0, 64, 64 };
+				npcs[id].setColor(sf::Color::Blue);
+				npcs[id].NameboardSetting();
+				break;
+			case O_NPC:
+				npcs[id] = OBJECT{ *pieces, 256, 0, 64, 64 };
+				break;
+			}
+		
 			npcs[id].move(my_packet->x, my_packet->y);
 			npcs[id].show();
 		}
@@ -271,6 +295,28 @@ void client_main()
 			int tile_x = i + g_left_x;
 			int tile_y = j + g_top_y;
 			if ((tile_x < 0) || (tile_y < 0)) continue;
+			if (g_myServerId == 0) {
+				if (tile_y >= 20) {
+					white_tile.setColor(sf::Color::Red);
+					black_tile.setColor(sf::Color::Red);
+				}
+				else {
+					white_tile.setColor(sf::Color::White);
+					black_tile.setColor(sf::Color::White);
+				}
+			}
+			else {
+				if (tile_y < 20) {
+					white_tile.setColor(sf::Color::Red);
+					black_tile.setColor(sf::Color::Red);
+				}
+				else {
+					white_tile.setColor(sf::Color::White);
+					black_tile.setColor(sf::Color::White);
+				}
+			}
+
+			
 			if (((tile_x / 3 + tile_y / 3) % 2) == 0) {
 				white_tile.a_move(TILE_WIDTH * i + 7, TILE_WIDTH * j + 7);
 				white_tile.a_draw();
@@ -283,7 +329,9 @@ void client_main()
 		}
 	avatar.draw();
 	//	for (auto &pl : players) pl.draw();
-	for (auto& npc : npcs) npc.second.draw();
+	for (auto& npc : npcs) 
+		npc.second.draw();
+
 	sf::Text text;
 	text.setFont(g_font);
 	char buf[100];
