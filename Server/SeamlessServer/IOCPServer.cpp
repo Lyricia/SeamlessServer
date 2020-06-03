@@ -8,6 +8,7 @@
 #include <thread>
 #include <mutex>
 #include <string>
+#include <unordered_set>
 #include <concurrent_unordered_map.h>
 using namespace std;
 
@@ -55,6 +56,9 @@ struct CLIENT : Base_Info {
 	int		m_ServerID = -1;
 	bool	m_IsInBufferSection = false;
 
+	unordered_set<int> view_list;
+	mutex view_list_lock;
+
 	short x, y;
 	char m_name[MAX_ID_LEN + 1];
 };
@@ -73,6 +77,8 @@ bool Is_Other_Server_Connected = false;
 Base_Info other_server_info;
 
 int server_buffer_pos = -1;
+int Server_Start_X = -1;
+int Server_Start_Y = -1;
 
 
 void error_display(const char* msg, int err_no)
@@ -246,10 +252,14 @@ void do_move(int user_id, int direction)
 	int x = u.x;
 	int y = u.y;
 	switch (direction) {
-	case D_UP: if (y > 0) y--; break;
-	case D_DOWN: if (y < (WORLD_HEIGHT - 1)) y++; break;
-	case D_LEFT: if (x > 0) x--; break;
-	case D_RIGHT: if (x < (WORLD_WIDTH - 1)) x++; break;
+	case D_UP: 
+		if (y > Server_Start_Y) y--; break;
+	case D_DOWN: 
+		if (y < Server_Start_Y + (SESSION_HEIGHT - 1)) y++; break;
+	case D_LEFT: 
+		if (x > 0) x--; break;
+	case D_RIGHT: 
+		if (x < (WORLD_WIDTH - 1)) x++; break;
 	default:
 		cout << "Unknown Direction from Client move packet!\n";
 		DebugBreak();
@@ -474,8 +484,8 @@ void process_packet(int key, char* buf)
 		//g_clients[clientid].m_status = ST_FREE;
 		//g_clients[clientid].m_cl.unlock();
 
-		printf("Server %d Client %d ", g_clients[clientid].m_ServerID, g_clients[clientid].m_id);
-		cout << g_clients[clientid].m_name << " connected\n";
+		printf("Server %d proxy Client %d ", g_clients[clientid].m_ServerID, g_clients[clientid].m_id);
+		cout << g_clients[clientid].m_name << " disconnected\n";
 		break;
 	}
 	default:
@@ -737,6 +747,8 @@ int main()
 	else if (g_my_server_id == 1)
 		server_buffer_pos = 24;
 
+	Server_Start_X = SESSION_WIDTH;// *g_my_server_id;
+	Server_Start_Y = SESSION_HEIGHT * g_my_server_id;
 
 
 	g_iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, NULL, 0);

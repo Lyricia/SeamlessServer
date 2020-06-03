@@ -6,6 +6,9 @@ constexpr int MAX_STR_LEN = 255;
 #define WORLD_WIDTH		20
 #define WORLD_HEIGHT	40
 
+#define SESSION_WIDTH		20
+#define SESSION_HEIGHT		20
+
 #define VIEW_RANGE		6
 
 #define SERVER_PORT			9000
