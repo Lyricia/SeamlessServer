@@ -4,3 +4,7 @@
 Server/.vs/
 Server/SeamlessServer/x64/
 Server/x64/
+Frontend/.vs/
+Frontend/Frontend/Debug/
+Frontend/Frontend/x64/
+Frontend/x64/

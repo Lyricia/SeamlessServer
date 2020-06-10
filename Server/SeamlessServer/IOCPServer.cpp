@@ -248,17 +248,6 @@ void send_move_packet(int user_id, int mover, bool isMoverProxy)
 	p.x = cl_mover->x;
 	p.y = cl_mover->y;
 
-	//if (false == isMoverProxy) {
-	//	p.x = g_clients[mover].x;
-	//	p.y = g_clients[mover].y;
-	//}
-	//else {
-	//	auto& cl = g_proxy_clients[mover];
-	//	p.x = cl->x;
-	//	p.y = cl->y;
-	//}
-	//send_client_packet(user_id, &p);
-
 	auto& cl = g_clients[user_id];
 	cl.view_list_lock.lock();
 	if ((user_id == mover) || (0 != cl.view_list.count(mover))) {
@@ -374,13 +363,6 @@ void do_move(int user_id, int direction)
 		}
 	}
 
-	//for (auto& cl : g_clients) {
-	//	cl.m_cl.lock();
-	//	if (ST_ACTIVE == cl.m_status)
-	//		send_move_packet(cl.m_id, user_id, false);
-	//	cl.m_cl.unlock();
-	//}
-
 	if (true == Is_Other_Server_Connected)
 	{
 		// 경계영역에 위치해 있던 경우 버퍼영역을 넘어 완전탈출 전까지 move패킷은 보내주어야함
@@ -415,14 +397,6 @@ void do_move(int user_id, int direction)
 			}
 		}
 	}
-
-	//ss_packet_client_move p;
-	//p.size = sizeof(ss_packet_client_move);
-	//p.type = S2S_CLIENT_MOVE;
-	//p.clientid = user_id;
-	//p.x = u.x;
-	//p.y = u.y;
-	//send_server_packet(other_server_info.m_socket, &p);
 
 	printf("client [%d]moved [%d]dir : (%d, %d)\n", user_id, direction, u.x, u.y);
 }
@@ -530,7 +504,9 @@ void Process_Proxy_Client_Move(int proxyid) {
 
 void process_packet(int key, char* buf)
 {
-	switch (buf[1]) {
+	unsigned char packettype = buf[1];
+
+	switch (packettype) {
 	case C2S_LOGIN: {
 		int user_id = key;
 		if (user_id >= SS_ACCEPT_TAG) break;
@@ -555,7 +531,6 @@ void process_packet(int key, char* buf)
 	case S2S_CLIENT_CONN: {
 		ss_packet_client_connect* packet = reinterpret_cast<ss_packet_client_connect*>(buf);
 
-		//int proxy_id = packet->id + MAX_USER * packet->ownerserverid + SS_ACCEPT_TAG;
 		int proxy_id = getProxyClientID(packet->id, packet->ownerserverid);
 		auto nc = new CLIENT;
 
@@ -589,44 +564,17 @@ void process_packet(int key, char* buf)
 				}
 			}
 		}
-
-		//g_clients[packet->id].m_cl.lock();
-		//for (int i = 0; i < MAX_USER; i++) {
-		//	//if (packet->id == i) continue;
-		//	//if (g_clients[i].m_ServerID != g_my_server_id + SS_ACCEPT_TAG) continue;
-		//
-		//	g_clients[i].m_cl.lock();
-		//	if (ST_ACTIVE == g_clients[i].m_status)
-		//		//if (packet->id != i) {
-		//			//send_enter_packet(packet->id, i);
-		//		send_enter_packet(i, proxy_id, true);
-		//	//}
-		//	g_clients[i].m_cl.unlock();
-		//}
-		//g_clients[packet->id].m_cl.unlock();
 		break;
 	}
 
 	case S2S_CLIENT_MOVE: {
 		ss_packet_client_move* packet = reinterpret_cast<ss_packet_client_move*>(buf);
-		//int serverid = key;
-		//int proxyid = packet->clientid + key * MAX_USER + SS_ACCEPT_TAG;
 		int proxyid = getProxyClientID(packet->clientid, key);
 
 		auto& proxycl = g_proxy_clients[proxyid];
 
 		proxycl->x = packet->x;
 		proxycl->y = packet->y;
-
-		//g_clients[packet->clientid].x = packet->x;
-		//g_clients[packet->clientid].y = packet->y;
-
-		//for (auto& cl : g_clients) {
-		//	cl.m_cl.lock();
-		//	if (ST_ACTIVE == cl.m_status)
-		//		send_move_packet(cl.m_id, proxyid, true);
-		//	cl.m_cl.unlock();
-		//}
 
 		Process_Proxy_Client_Move(proxyid);
 
@@ -637,24 +585,16 @@ void process_packet(int key, char* buf)
 		ss_packet_disconnect* packet = reinterpret_cast<ss_packet_disconnect*>(buf);
 
 		int proxyid = getProxyClientID(packet->clientid, key);
-		//int proxyid = packet->clientid + key * MAX_USER + SS_ACCEPT_TAG;
 		auto& cl = g_proxy_clients[proxyid];
 
 		int clientid = packet->clientid;
-		//g_clients[clientid].m_cl.lock();
 		cl->m_status = ST_FREE;
-		//g_clients[clientid].m_status = ST_ALLOC;
 		for (auto& cl : g_clients) {
-			//if (clientid == cl.m_id) continue;
-			//if (cl.m_ServerID != g_my_server_id + SS_ACCEPT_TAG) continue;
 			cl.m_cl.lock();
 			if (ST_ACTIVE == cl.m_status)
-				//send_leave_packet(cl.m_id, clientid);
 				send_leave_packet(cl.m_id, proxyid);
 			cl.m_cl.unlock();
 		}
-		//g_clients[clientid].m_status = ST_FREE;
-		//g_clients[clientid].m_cl.unlock();
 
 		printf("Server %d proxy Client %d ", g_clients[clientid].m_ServerID, g_clients[clientid].m_id);
 		cout << g_clients[clientid].m_name << " disconnected\n";
