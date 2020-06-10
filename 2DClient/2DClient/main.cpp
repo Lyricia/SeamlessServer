@@ -367,7 +367,7 @@ E_STATUS status = E_STATUS::SERVER_SELECT;
 
 void ServerConnect(int serverid) {
 	wcout.imbue(locale("korean"));
-	sf::Socket::Status sock = g_socket.connect("127.0.0.1", SERVER_PORT + serverid);
+	sf::Socket::Status sock = g_socket.connect("127.0.0.1", SERVER_PORT + 100);
 	g_socket.setBlocking(false);
 
 	if (sock != sf::Socket::Done) {

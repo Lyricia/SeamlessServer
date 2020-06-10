@@ -15,8 +15,8 @@ using namespace std;
 #include "protocol.h"
 constexpr auto MAX_PACKET_SIZE = 255;
 constexpr auto MAX_BUF_SIZE = 1024;
-constexpr auto MAX_USER = 1000;
 
+constexpr auto FS_ACCEPT_TAG = 300000;
 constexpr auto SS_ACCEPT_TAG = 200000;
 constexpr auto SC_ACCEPT_TAG = 100000;
 
@@ -45,6 +45,8 @@ struct Base_Info {
 struct CLIENT : Base_Info {
 	mutex	m_cl;
 
+	int		m_list_slot_idx;
+
 	//SOCKET	m_socket;
 	//int		m_id;
 	//EXOVER  m_recv_over;
@@ -60,11 +62,12 @@ struct CLIENT : Base_Info {
 	mutex view_list_lock;
 
 	short x, y;
-	char m_name[MAX_ID_LEN + 1];
+	char m_name[MAX_ID_LEN + 1]{};
 };
 
 
-CLIENT g_clients[MAX_USER];
+
+CLIENT g_clients[MAX_USER_PER_SERVER];
 Concurrency::concurrent_unordered_map<int, CLIENT*> g_proxy_clients;
 
 HANDLE g_iocp;
@@ -74,7 +77,9 @@ int g_other_server_id;			// 나의 서버 ID
 int g_my_server_id;				// 이웃 Server의 ID
 SOCKET s_other_server;			// 이웃 Zone Server의 Socket
 bool Is_Other_Server_Connected = false;
+
 Base_Info other_server_info;
+Base_Info frontend_server_info;
 
 int server_buffer_pos = -1;
 int Server_Start_X = -1;
@@ -108,11 +113,12 @@ bool is_near(int a, int b, bool IsOpponentProxy)
 {
 	if (VIEW_RANGE < abs(g_clients[a].x - g_clients[b].x)) return false;
 	if (VIEW_RANGE < abs(g_clients[a].y - g_clients[b].y)) return false;
+	if (VIEW_RANGE < abs(g_clients[a].y - g_clients[b].y)) return false;
 	return true;
 }
 
 int getProxyClientID(int id, int serverid) {
-	return id + (serverid * MAX_USER) + SS_ACCEPT_TAG;
+	return id + MAX_USER_PER_SERVER;
 }
 
 bool IsInServerBufferSection(int y) {
@@ -137,7 +143,11 @@ bool IsOutServerBufferSection(int y) {
 
 bool IsProxyClient(int id)
 {
-	return (id > SC_ACCEPT_TAG);
+	return ((id / MAX_USER_PER_SERVER) != g_my_server_id);
+}
+
+CLIENT& GetClientByID(int id) {
+	return g_clients[id - (g_my_server_id * MAX_USER_PER_SERVER)];
 }
 
 void send_client_packet(int user_id, void* p)
@@ -172,111 +182,139 @@ void send_server_packet(SOCKET& s, void* p)
 	exover->wsabuf.len = buf[0];
 	memcpy(exover->io_buf, buf, buf[0]);
 
-	WSASend(s, &exover->wsabuf, 1, NULL, 0, &exover->over, NULL);
+	int ret = WSASend(s, &exover->wsabuf, 1, NULL, 0, &exover->over, NULL);
+	if (0 != ret) {
+		int err_no = WSAGetLastError();
+		if ((WSAECONNRESET == err_no) || (WSAECONNABORTED == err_no) || (WSAENOTSOCK == err_no)) {
+			//Disconnect(id);
+			return;
+		}
+		else
+			if (WSA_IO_PENDING != err_no)
+				error_display("WSASend Error :", err_no);
+	}
 	printf("send serv %ld, [%d]\n", s, buf[1]);
 	//cout << "send server packet to : " << s_other_server << endl;
 }
 
-void send_login_ok_packet(int user_id)
+void send_login_ok_packet(CLIENT& cl)
 {
 	sc_packet_login_ok p;
 	p.exp = 0;
 	p.hp = 0;
-	p.id = user_id;
+	p.id = cl.m_id;
 	p.level = 0;
 	p.size = sizeof(p);
 	p.type = S2C_LOGIN_OK;
-	p.x = g_clients[user_id].x;
-	p.y = g_clients[user_id].y;
+	p.x = cl.x;
+	p.y = cl.y;
 	p.serverid = g_my_server_id;
+	p.recvid = cl.m_id;
 
-	send_client_packet(user_id, &p);
+	//sf_packet_client_login_ok msg;
+	//msg.p = p;
+	//msg.recvid = g_clients[user_id].m_id;
+
+	send_server_packet(frontend_server_info.m_socket, &p);
+
+	printf("recver %d, target %d\n", p.recvid, p.id);
+	//send_client_packet(user_id, &p);
 }
 
-void send_enter_packet(int user_id, int o_id, bool isProxyEnter)
+void send_enter_packet(int user_slot_idx, int object_id, bool isProxyEnter)
 {
+	auto& user = g_clients[user_slot_idx];
+
 	sc_packet_enter p;
-	p.id = o_id;
+	p.id = object_id;
 	p.size = sizeof(p);
 	p.type = S2C_ENTER;
 
 	if (false == isProxyEnter) {
 		p.o_type = O_PLAYER;
-		p.x = g_clients[o_id].x;
-		p.y = g_clients[o_id].y;
-		strcpy_s(p.name, g_clients[o_id].m_name);
+		p.x = g_clients[object_id].x;
+		p.y = g_clients[object_id].y;
+		strcpy_s(p.name, g_clients[object_id].m_name);
 	}
 	else if (true == isProxyEnter) {
-		auto& cl = g_proxy_clients[o_id];
+		auto& cl = g_proxy_clients[object_id];
 		p.o_type = O_PROXY;
 		p.x = cl->x;
 		p.y = cl->y;
 		strcpy_s(p.name, cl->m_name);
 	}
+	p.recvid = user.m_id;
 
-	send_client_packet(user_id, &p);
+	//send_client_packet(user_id, &p);
+	send_server_packet(frontend_server_info.m_socket, &p);
 
-
-	if (user_id == o_id) return;
-	lock_guard<mutex>lg{ g_clients[user_id].view_list_lock };
-	g_clients[user_id].view_list.insert(o_id);
+	if (user.m_id == object_id) return;
+	lock_guard<mutex>lg{ user.view_list_lock };
+	user.view_list.insert(object_id);
 }
 
-void send_leave_packet(int user_id, int o_id)
+void send_leave_packet(int user_id, int leaverid)
 {
+	auto& user = GetClientByID(user_id);
 	sc_packet_leave p;
-	p.id = o_id;
+	p.id = leaverid;
 	p.size = sizeof(p);
 	p.type = S2C_LEAVE;
+	p.recvid = user.m_id;
 
-	send_client_packet(user_id, &p);
+	send_server_packet(frontend_server_info.m_socket, &p);
 
-	lock_guard<mutex>lg{ g_clients[user_id].view_list_lock };
-	g_clients[user_id].view_list.erase(o_id);
+	//send_client_packet(user_id, &p);
+
+	lock_guard<mutex>lg{ user.view_list_lock };
+	user.view_list.erase(leaverid);
 }
 
-void send_move_packet(int user_id, int mover, bool isMoverProxy)
+void send_move_packet(CLIENT& user, int moverid, bool isMoverProxy)
 {
 	sc_packet_move p;
-	p.id = mover;
+	p.id = moverid;
 	p.size = sizeof(p);
 	p.type = S2C_MOVE;
 	CLIENT* cl_mover = nullptr;
-	if (false == isMoverProxy) cl_mover = &g_clients[mover];
-	else cl_mover = g_proxy_clients[mover];
+	if (false == isMoverProxy) cl_mover = &GetClientByID(moverid);
+	else cl_mover = g_proxy_clients[moverid];
 
 	p.x = cl_mover->x;
 	p.y = cl_mover->y;
+	p.recvid = user.m_id;
 
-	auto& cl = g_clients[user_id];
-	cl.view_list_lock.lock();
-	if ((user_id == mover) || (0 != cl.view_list.count(mover))) {
-		cl.view_list_lock.unlock();
-		send_client_packet(user_id, &p);
+
+	send_server_packet(frontend_server_info.m_socket, &p);
+
+	user.view_list_lock.lock();
+	if ((user.m_id == moverid) || (0 != user.view_list.count(moverid))) {
+		user.view_list_lock.unlock();
+		//send_client_packet(user.m_id, &p);
 	}
 	else {
-		cl.view_list_lock.unlock();
-		send_enter_packet(user_id, mover, isMoverProxy);
+		user.view_list_lock.unlock();
+		send_enter_packet(user.m_list_slot_idx, moverid, isMoverProxy);
 	}
 }
 
-void send_client_creation_to_server(int user_id)
+void send_client_creation_to_server(CLIENT& user)
 {
 	ss_packet_client_connect p;
 	p.size = sizeof(ss_packet_client_connect);
 	p.type = S2S_CLIENT_CONN;
-	p.id = user_id;
+	p.id = user.m_id;
 	p.ownerserverid = g_my_server_id;
-	p.x = g_clients[user_id].x;
-	p.y = g_clients[user_id].y;
-	strcpy_s(p.name, g_clients[user_id].m_name);
+	p.x = user.x;
+	p.y = user.y;
+	strcpy_s(p.name, user.m_name);
 
 	send_server_packet(other_server_info.m_socket, &p);
 }
 
-void do_move(int user_id, int direction)
+void do_move(CLIENT& u, int direction)
 {
-	CLIENT& u = g_clients[user_id];
+	//CLIENT& u = g_clients[user_id];
 	int x = u.x;
 	int y = u.y;
 
@@ -305,26 +343,26 @@ void do_move(int user_id, int direction)
 	// local list
 	for (auto& othercl : g_clients) {
 		int otherid = othercl.m_id;
-		if (user_id == otherid) continue;
+		if (u.m_id == otherid) continue;
 		if (ST_FREE == othercl.m_status) continue;
-		if (true == is_near(g_clients[user_id], othercl)) new_vl.insert(otherid);
+		if (true == is_near(u, othercl)) new_vl.insert(otherid);
 	}
 	// proxy list
 	for (auto& otherProxycl : g_proxy_clients) {
 		auto othercl = otherProxycl.second;
 		int otherid = othercl->m_id;
-		if (user_id == otherid) continue;
+		if (u.m_id == otherid) continue;
 		if (ST_FREE == othercl->m_status) continue;
-		if (true == is_near(g_clients[user_id], *othercl)) new_vl.insert(otherid);
+		if (true == is_near(u, *othercl)) new_vl.insert(otherid);
 	}
 
-	send_move_packet(user_id, user_id, false);
+	send_move_packet(u, u.m_id, false);
 
 	// Old View list를 순회하면서 맞는 packet을 보냄
 	for (auto cl : old_vl) {
 		if (0 != new_vl.count(cl)) {				// new view list에 있으면 move packet을 보냄
 			if (false == IsProxyClient(cl))			// cl이 local client면 그냥 보냄
-				send_move_packet(cl, user_id, false);
+				send_move_packet(GetClientByID(cl), u.m_id, false);
 			//else {
 			//	// proxy client라면 서버로 move packet을 보냄
 			//	// 상대 서버의 원본 client에도 동일하게 viewlist가 적용되어있기 때문에
@@ -338,12 +376,13 @@ void do_move(int user_id, int direction)
 			//}
 		}
 		else {			// new view list에 없으면 leave packet을 보냄
-			send_leave_packet(user_id, cl);
-			if (false == IsProxyClient(cl))
-				send_leave_packet(cl, user_id);
+			send_leave_packet(u.m_id, cl);
+			if (false == IsProxyClient(cl)){
+				send_leave_packet(cl, u.m_id);
+			}
 			else {
 				g_proxy_clients[cl]->view_list_lock.lock();
-				g_proxy_clients[cl]->view_list.erase(user_id);
+				g_proxy_clients[cl]->view_list.erase(u.m_id);
 				g_proxy_clients[cl]->view_list_lock.unlock();
 			}
 		}
@@ -351,14 +390,14 @@ void do_move(int user_id, int direction)
 	for (auto cl : new_vl) {
 		if (0 == old_vl.count(cl)) {
 			if (true == IsProxyClient(cl)) {
-				send_enter_packet(user_id, cl, true);
+				send_enter_packet(u.m_list_slot_idx, cl, true);
 				g_proxy_clients[cl]->view_list_lock.lock();
-				g_proxy_clients[cl]->view_list.insert(user_id);
+				g_proxy_clients[cl]->view_list.insert(u.m_id);
 				g_proxy_clients[cl]->view_list_lock.unlock();
 			}
 			else {
-				send_enter_packet(user_id, cl, false);
-				send_enter_packet(cl, user_id, false);
+				send_enter_packet(u.m_list_slot_idx, cl, false);
+				send_enter_packet(cl, u.m_id, false);
 			}
 		}
 	}
@@ -372,14 +411,14 @@ void do_move(int user_id, int direction)
 			ss_packet_client_move p;
 			p.size = sizeof(ss_packet_client_move);
 			p.type = S2S_CLIENT_MOVE;
-			p.clientid = user_id;
+			p.clientid = u.m_id;
 			p.x = u.x;
 			p.y = u.y;
 			send_server_packet(other_server_info.m_socket, &p);
 		}
 		else if (IsInServerBufferSection(u.y)) {
 			// 새로 경계영역에 완전히 진입한 경우 Enter Packet 전송
-			send_client_creation_to_server(user_id);
+			send_client_creation_to_server(u);
 			u.m_IsInBufferSection = true;
 		}
 
@@ -390,7 +429,7 @@ void do_move(int user_id, int direction)
 				ss_packet_disconnect p;
 				p.size = sizeof(p);
 				p.type = S2S_CLIENT_DISCONN;
-				p.clientid = user_id;
+				p.clientid = u.m_id;
 				send_server_packet(other_server_info.m_socket, &p);
 
 				u.m_IsInBufferSection = false;
@@ -398,50 +437,63 @@ void do_move(int user_id, int direction)
 		}
 	}
 
-	printf("client [%d]moved [%d]dir : (%d, %d)\n", user_id, direction, u.x, u.y);
+	printf("client [%d]moved [%d]dir : (%d, %d)\n", u.m_id, direction, u.x, u.y);
 }
 
-void enter_game(int user_id, char name[])
+void enter_game(CLIENT& newclient, char name[])
 {
-	g_clients[user_id].m_cl.lock();
-	strcpy_s(g_clients[user_id].m_name, name);
-	g_clients[user_id].m_name[MAX_ID_LEN] = NULL;
-	send_login_ok_packet(user_id);
+	newclient.m_cl.lock();
+	strcpy_s(newclient.m_name, name);
+	newclient.m_name[MAX_ID_LEN] = NULL;
+
+	newclient.m_ServerID = g_my_server_id + SS_ACCEPT_TAG;
+	newclient.y = 19 + g_my_server_id;
+	newclient.x = rand() % WORLD_WIDTH;
+	//nc.y = rand() % WORLD_HEIGHT;
+	//nc.y = (rand() % (WORLD_HEIGHT/2)) + ((WORLD_HEIGHT/2) * g_my_server_id);
+
+
+	send_login_ok_packet(newclient);
 
 	// local client routine
-	for (int i = 0; i < MAX_USER; i++) {
-		if (user_id == i) continue;
-		g_clients[i].m_cl.lock();
-		if (ST_ACTIVE != g_clients[i].m_status) {
-			if (true == is_near(g_clients[user_id], g_clients[i])) {
-				send_enter_packet(i, user_id, false);
-				if (user_id != i) {
-					send_enter_packet(user_id, i, false);
+	for (int list_idx = 0; list_idx < MAX_USER_PER_SERVER; list_idx++) {
+		if (newclient.m_list_slot_idx == list_idx) continue;
+		g_clients[list_idx].m_cl.lock();
+		if (ST_ACTIVE != g_clients[list_idx].m_status) {
+			if (true == is_near(newclient, g_clients[list_idx])) {
+				send_enter_packet(list_idx, newclient.m_id, false);
+				if (newclient.m_list_slot_idx != list_idx) {
+					send_enter_packet(newclient.m_list_slot_idx, list_idx, false);
 				}
 			}
 		}
-		g_clients[i].m_cl.unlock();
+		g_clients[list_idx].m_cl.unlock();
 	}
 
 	// proxy client routine
 	for (auto& proxycl : g_proxy_clients) {
 		proxycl.second->m_cl.lock();
 		if (ST_ACTIVE == proxycl.second->m_status) {
-			if (true == is_near(g_clients[user_id], *proxycl.second)) {
-				send_enter_packet(user_id, proxycl.first, true);
+			if (true == is_near(newclient, *proxycl.second)) {
+				send_enter_packet(newclient.m_list_slot_idx, proxycl.first, true);
 				proxycl.second->view_list_lock.lock();
-				proxycl.second->view_list.insert(user_id);
+				proxycl.second->view_list.insert(newclient.m_id);
 				proxycl.second->view_list_lock.unlock();
 			}
 		}
 		proxycl.second->m_cl.unlock();
 	}
 
-	g_clients[user_id].m_status = ST_ACTIVE;
-	g_clients[user_id].m_cl.unlock();
+	newclient.m_status = ST_ACTIVE;
+	newclient.m_cl.unlock();
 
+	printf("client %d Connected\n", newclient.m_id);
 
-	printf("client %d Connected\n", user_id);
+	if (true == Is_Other_Server_Connected)
+		if (IsInServerBufferSection(newclient.y)) {
+			send_client_creation_to_server(newclient);
+			newclient.m_IsInBufferSection = true;
+		}
 }
 
 void Create_Client_Conn(int user_id)
@@ -483,7 +535,7 @@ void Process_Proxy_Client_Move(int proxyid) {
 	// 작성된 proxy client의 viewlist를 기반으로 local client에게 packet 전달
 	for (auto cl : old_proxy_vl) {
 		if (0 != new_proxy_vl.count(cl)) {
-			send_move_packet(cl, proxyid, true);
+			send_move_packet(GetClientByID(cl), proxyid, true);
 		}
 		else {
 			send_leave_packet(cl, proxyid);
@@ -508,18 +560,19 @@ void process_packet(int key, char* buf)
 
 	switch (packettype) {
 	case C2S_LOGIN: {
-		int user_id = key;
-		if (user_id >= SS_ACCEPT_TAG) break;
-		//if (g_clients[user_id].m_ServerID != g_my_server_id + SS_ACCEPT_TAG) break;
 		cs_packet_login* packet = reinterpret_cast<cs_packet_login*>(buf);
-		enter_game(user_id, packet->name);
+		int user_idx = packet->sender - (g_my_server_id * MAX_USER_PER_SERVER);
+		
+		g_clients[user_idx].m_id = packet->sender;
+		g_clients[user_idx].m_list_slot_idx = user_idx;
+
+		enter_game(g_clients[user_idx], packet->name);
 		break;
 	}
 	case C2S_MOVE: {
-		int user_id = key;
-		if (user_id >= SS_ACCEPT_TAG) break;
 		cs_packet_move* packet = reinterpret_cast<cs_packet_move*>(buf);
-		do_move(user_id, packet->direction);
+		//int user_id = packet->sender - (g_my_server_id * MAX_USER_PER_SERVER);
+		do_move(GetClientByID(packet->sender), packet->direction);
 		break;
 	}
 	case S2S_CONN: {
@@ -531,16 +584,12 @@ void process_packet(int key, char* buf)
 	case S2S_CLIENT_CONN: {
 		ss_packet_client_connect* packet = reinterpret_cast<ss_packet_client_connect*>(buf);
 
-		int proxy_id = getProxyClientID(packet->id, packet->ownerserverid);
+		int proxy_id = packet->id;
 		auto nc = new CLIENT;
 
 		//CLIENT& nc = g_clients[packet->id];
 		nc->m_ServerID = packet->ownerserverid + SS_ACCEPT_TAG;
 		nc->m_prev_size = 0;
-		nc->m_recv_over.op = OP_RECV;
-		ZeroMemory(&nc->m_recv_over.over, sizeof(nc->m_recv_over.over));
-		nc->m_recv_over.wsabuf.buf = nc->m_recv_over.io_buf;
-		nc->m_recv_over.wsabuf.len = MAX_BUF_SIZE;
 		//nc.m_socket = c_socket;
 		nc->m_id = proxy_id;
 		nc->x = packet->x;
@@ -569,7 +618,8 @@ void process_packet(int key, char* buf)
 
 	case S2S_CLIENT_MOVE: {
 		ss_packet_client_move* packet = reinterpret_cast<ss_packet_client_move*>(buf);
-		int proxyid = getProxyClientID(packet->clientid, key);
+		//int proxyid = getProxyClientID(packet->clientid, key);
+		int proxyid = packet->clientid;
 
 		auto& proxycl = g_proxy_clients[proxyid];
 
@@ -584,7 +634,7 @@ void process_packet(int key, char* buf)
 	case S2S_CLIENT_DISCONN: {
 		ss_packet_disconnect* packet = reinterpret_cast<ss_packet_disconnect*>(buf);
 
-		int proxyid = getProxyClientID(packet->clientid, key);
+		int proxyid = packet->clientid;
 		auto& cl = g_proxy_clients[proxyid];
 
 		int clientid = packet->clientid;
@@ -610,7 +660,7 @@ void process_packet(int key, char* buf)
 
 void initialize_clients()
 {
-	for (int i = 0; i < MAX_USER; ++i) {
+	for (int i = 0; i < MAX_USER_PER_SERVER; ++i) {
 		g_clients[i].m_id = i;
 		g_clients[i].m_status = ST_FREE;
 	}
@@ -721,7 +771,8 @@ void Create_Server_Connection(SOCKET& other_server_socket, int other_server_id, 
 		cout << SERVER_PORT + 10 + g_other_server_id << endl;
 
 		inet_pton(AF_INET, "127.0.0.1", &ServerAddr.sin_addr);
-		int timeout = 500;
+
+		if (true == Is_Other_Server_Connected) return;
 		int Result = WSAConnect(other_server_socket, (sockaddr*)&ServerAddr, sizeof(ServerAddr), NULL, NULL, NULL, NULL);
 		if (0 != Result) {
 			error_display("No other server available\n", GetLastError());
@@ -771,6 +822,7 @@ void worker_thread()
 					disconnect(user_id);
 				else {
 					// disconnect_server;;
+					exit(-1);
 				}
 			}
 			else {
@@ -781,8 +833,16 @@ void worker_thread()
 					DWORD flags = 0;
 					WSARecv(cl.m_socket, &cl.m_recv_over.wsabuf, 1, NULL, &flags, &cl.m_recv_over.over, NULL);
 				}
-				else if (user_id >= SS_ACCEPT_TAG) {
+				else if (user_id >= SS_ACCEPT_TAG && user_id < FS_ACCEPT_TAG) {
 					auto& servinfo = other_server_info;
+
+					recv_packet_construct(servinfo, io_byte);
+					ZeroMemory(&servinfo.m_recv_over.over, sizeof(servinfo.m_recv_over.over));
+					DWORD flags = 0;
+					WSARecv(servinfo.m_socket, &servinfo.m_recv_over.wsabuf, 1, NULL, &flags, &servinfo.m_recv_over.over, NULL);
+				}
+				else if (user_id >= FS_ACCEPT_TAG) {
+					auto& servinfo = frontend_server_info;
 
 					recv_packet_construct(servinfo, io_byte);
 					ZeroMemory(&servinfo.m_recv_over.over, sizeof(servinfo.m_recv_over.over));
@@ -801,11 +861,34 @@ void worker_thread()
 				if (Is_Other_Server_Connected == true) break;
 				Create_Server_Connection(exover->c_socket, g_other_server_id, true);
 			}
+			else if (user_id == FS_ACCEPT_TAG) {
+				// Front End Server
+				CreateIoCompletionPort(reinterpret_cast<HANDLE>(exover->c_socket), g_iocp, FS_ACCEPT_TAG, 0);
+				frontend_server_info.m_prev_size = 0;
+				frontend_server_info.m_recv_over.op = OP_RECV;
+				ZeroMemory(&frontend_server_info.m_recv_over.over, sizeof(frontend_server_info.m_recv_over.over));
+				frontend_server_info.m_recv_over.wsabuf.buf = frontend_server_info.m_recv_over.io_buf;
+				frontend_server_info.m_recv_over.wsabuf.len = MAX_BUF_SIZE;
+				frontend_server_info.m_socket = exover->c_socket;
+				frontend_server_info.m_id = FS_ACCEPT_TAG;
+				DWORD flags = 0;
+				int ret = WSARecv(frontend_server_info.m_socket,
+					&frontend_server_info.m_recv_over.wsabuf, 1, NULL,
+					&flags, &frontend_server_info.m_recv_over.over, NULL);
+
+				if (0 != ret) {
+					int err_no = WSAGetLastError();
+					if (WSA_IO_PENDING != err_no)
+						error_display("WSARecv Error :", err_no);
+				}
+
+				cout << "Start Frontend Server Recv : " << frontend_server_info.m_socket << endl;
+			}
 
 			// Client Connection
 			else if (user_id == SC_ACCEPT_TAG) {
 				int user_id = -1;
-				for (int i = 0; i < MAX_USER; ++i) {
+				for (int i = 0; i < MAX_USER_PER_SERVER; ++i) {
 					lock_guard<mutex> gl{ g_clients[i].m_cl };
 					if (ST_FREE == g_clients[i].m_status) {
 						g_clients[i].m_status = ST_ALLOC;
@@ -836,7 +919,7 @@ void worker_thread()
 
 					if (true == Is_Other_Server_Connected)
 						if (IsInServerBufferSection(nc.y)) {
-							send_client_creation_to_server(user_id);
+							send_client_creation_to_server(nc);
 							nc.m_IsInBufferSection = true;
 						}
 				}
@@ -846,8 +929,8 @@ void worker_thread()
 				AcceptEx(listen_socket, c_socket, exover->io_buf, NULL, sizeof(sockaddr_in) + 16, sizeof(sockaddr_in) + 16, NULL, &exover->over);
 			}
 
+			break;
 		}
-					  break;
 		}
 	}
 }
@@ -875,7 +958,7 @@ int main()
 
 	int ret = 0;
 	int retry = 0;
-	while (true){
+	while (true) {
 		s2s_listen_sock = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
 		memset(&s_address, 0, sizeof(s_address));
 		s_address.sin_family = AF_INET;
@@ -934,7 +1017,7 @@ int main()
 	s_address.sin_addr.S_un.S_addr = htonl(INADDR_ANY);
 	::bind(listen_socket, reinterpret_cast<sockaddr*>(&s_address), sizeof(s_address));
 	listen(listen_socket, SOMAXCONN);
-	CreateIoCompletionPort(reinterpret_cast<HANDLE>(listen_socket), g_iocp, SC_ACCEPT_TAG, 0);
+	CreateIoCompletionPort(reinterpret_cast<HANDLE>(listen_socket), g_iocp, FS_ACCEPT_TAG, 0);
 
 
 	// Client Accept

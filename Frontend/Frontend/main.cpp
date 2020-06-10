@@ -16,7 +16,6 @@ using namespace chrono;
 #include "../../Server/SeamlessServer/protocol.h"
 
 constexpr int MAX_BUFFER = 1024;
-constexpr int MAX_USER_PER_SERVER = 10000;
 constexpr int MAX_SERVER = 2;
 
 
@@ -29,12 +28,17 @@ struct OVER_EX {
 	EVENT_TYPE	event_type;
 };
 
-struct SOCKETINFO
+struct Base_Info 
 {
 	OVER_EX	recv_over;
 	char	pre_net_buf[MAX_BUFFER];
 	int		prev_packet_size;
 	SOCKET	socket;
+};
+
+struct SOCKETINFO
+{
+	Base_Info netinfo;
 
 	int		id;
 	int		serverId;
@@ -49,15 +53,13 @@ struct SOCKETINFO
 
 struct ServerInfo
 {
-	OVER_EX	recv_over;
-	char	pre_net_buf[MAX_BUFFER];
-	int		prev_packet_size;
-	SOCKET	socket;
+	Base_Info netinfo;
 
 	int		serverId;
 };
 
-Concurrency::concurrent_unordered_map <int, SOCKETINFO*> clients;
+//SOCKETINFO* clients[MAX_USER_PER_SERVER * MAX_SERVER];
+concurrency::concurrent_unordered_map<int, SOCKETINFO*> clients;
 Concurrency::concurrent_queue<int> Enable_Client_ids;
 ServerInfo ZoneServerList[2];
 HANDLE	g_iocp;
@@ -93,7 +95,7 @@ void send_packet(int id, void* buff)
 	memcpy(send_over->net_buf, packet, packet_size);
 	send_over->wsabuf[0].buf = send_over->net_buf;
 	send_over->wsabuf[0].len = packet_size;
-	int ret = WSASend(clients[id]->socket, send_over->wsabuf, 1, 0, 0, &send_over->over, 0);
+	int ret = WSASend(clients[id]->netinfo.socket, send_over->wsabuf, 1, 0, 0, &send_over->over, 0);
 	if (0 != ret) {
 		int err_no = WSAGetLastError();
 		if ((WSAECONNRESET == err_no) || (WSAECONNABORTED == err_no) || (WSAENOTSOCK == err_no)) {
@@ -129,145 +131,54 @@ void send_packet(SOCKET s, void* buff)
 	}
 }
 
-
-void send_put_object_packet(int client, int new_id)
-{
-	sc_packet_enter packet;
-	packet.id = new_id;
-	packet.size = sizeof(packet);
-	packet.type = S2C_ENTER;
-	//packet.x = clients[new_id]->x;
-	//packet.y = clients[new_id]->y;
-	packet.o_type = 1;
-	send_packet(client, &packet);
-
-	if (client == new_id) return;
-	lock_guard<mutex>lg{ clients[client]->near_lock };
-	clients[client]->near_id.insert(new_id);
-}
-
-
-
 void Disconnect(int id)
 {
 	cout << "Disconnect" << endl;
-	clients[id]->is_connected = false;
-	closesocket(clients[id]->socket);
-	for (auto& cl : clients) {
-		if (true == cl.second->is_connected) {
-
-		}
-	}
+	//clients[id]->is_connected = false;
+	//closesocket(clients[id]->socket);
+	//for (auto& cl : clients) {
+	//	if (true == cl->is_connected) {
+	//
+	//	}
+	//}
 }
-
-//void ProcessMove(int id, unsigned char dir)
-//{
-//	short x = clients[id]->x;
-//	short y = clients[id]->y;
-//	clients[id]->near_lock.lock();
-//	auto old_vl = clients[id]->near_id;
-//	clients[id]->near_lock.unlock();
-//	switch (dir) {
-//	case D_UP: if (y > 0) y--;
-//		break;
-//	case D_DOWN: if (y < WORLD_HEIGHT - 1) y++;
-//		break;
-//	case D_LEFT: if (x > 0) x--;
-//		break;
-//	case D_RIGHT: if (x < WORLD_WIDTH - 1) x++;
-//		break;
-//	case 99:
-//		x = rand() % WORLD_WIDTH;
-//		y = rand() % WORLD_HEIGHT;
-//		break;
-//	default: cout << "Invalid Direction Error\n";
-//		while (true);
-//	}
-//
-//	clients[id]->x = x;
-//	clients[id]->y = y;
-//
-//	set <int> new_vl;
-//	for (auto& cl : clients) {
-//		int other = cl.second->id;
-//		if (id == other) continue;
-//		if (false == clients[other]->is_connected) continue;
-//		if (true == is_near(id, other)) new_vl.insert(other);
-//	}
-//
-//	send_pos_packet(id, id);
-//	for (auto cl : old_vl) {
-//		if (0 != new_vl.count(cl)) {
-//			send_pos_packet(cl, id);
-//		}
-//		else
-//		{
-//			send_remove_object_packet(id, cl);
-//			send_remove_object_packet(cl, id);
-//		}
-//	}
-//	for (auto cl : new_vl) {
-//		if (0 == old_vl.count(cl)) {
-//			send_put_object_packet(id, cl);
-//			send_put_object_packet(cl, id);
-//		}
-//	}
-//}
-//
-//void ProcessLogin(int user_id, char* id_str)
-//{
-//	//for (auto cl : clients) {
-//	//	if (0 == strcmp(cl.second->name, id_str)) {
-//	//		send_login_fail(user_id);
-//	//		Disconnect(user_id);
-//	//		return;
-//	//	}
-//	//}
-//	strcpy_s(clients[user_id]->name, id_str);
-//	clients[user_id]->is_connected = true;
-//	send_login_ok_packet(user_id);
-//
-//
-//	for (auto& cl : clients) {
-//		int other_player = cl.first;
-//		if (false == clients[other_player]->is_connected) continue;
-//		if (true == is_near(other_player, user_id)) {
-//			send_put_object_packet(other_player, user_id);
-//			if (other_player != user_id) {
-//				send_put_object_packet(user_id, other_player);
-//			}
-//		}
-//	}
-//}
 
 void ProcessPacket(int id, void* buff)
 {
 	char* packet = reinterpret_cast<char*>(buff);
 	switch (packet[1]) {
-	case C2S_LOGIN:
+	case C2S_LOGIN: {
+		auto p = reinterpret_cast<cs_packet_login*>(buff);
+		p->sender = clients[id]->id;
+		send_packet(ZoneServerList[clients[id]->serverId].netinfo.socket, buff);
+		break;
+	}
 	case C2S_MOVE: {
-		send_packet(ZoneServerList[clients[id]->serverId].socket, buff);
+		auto p = reinterpret_cast<cs_packet_move*>(buff);
+		p->sender = clients[id]->id;
+		send_packet(ZoneServerList[clients[id]->serverId].netinfo.socket, buff);
 		break;
 	}
 
 	case S2C_LOGIN_OK: {
-		auto msg = reinterpret_cast<fs_packet_client_enter*>(buff);
-		send_packet(msg->recvid, &msg->p);
+		auto msg = reinterpret_cast<sc_packet_login_ok*>(buff);
+		clients[msg->recvid]->is_connected = true;
+		send_packet(msg->recvid, msg);
 		break;
 	}
 	case S2C_MOVE:	{
-		auto msg = reinterpret_cast<fs_packet_client_move*>(buff);
-		send_packet(msg->recvid, &msg->p);
+		auto msg = reinterpret_cast<sc_packet_move*>(buff);
+		send_packet(msg->recvid, msg);
 		break;
 	}
 	case S2C_ENTER:	{
-		auto msg = reinterpret_cast<fs_packet_client_enter*>(buff);
-		send_packet(msg->recvid, &msg->p);
+		auto msg = reinterpret_cast<sc_packet_enter*>(buff);
+		send_packet(msg->recvid, msg);
 		break;
 	}
 	case S2C_LEAVE:	{
-		auto msg = reinterpret_cast<fs_packet_client_leave*>(buff);
-		send_packet(msg->recvid, &msg->p);
+		auto msg = reinterpret_cast<sc_packet_leave*>(buff);
+		send_packet(msg->recvid, msg);
 		break;
 	}
 
@@ -297,8 +208,17 @@ void do_worker()
 			else
 				error_display("GQCS Error :", err_no);
 		}
-		SOCKET client_s = clients[key]->socket;
+		Base_Info* netinfo = nullptr;
+		if (key >= 200000) {
+			netinfo = &ZoneServerList[key - 200000].netinfo;
+		}
+		else if (key < 100000) {
+			netinfo = &clients[key]->netinfo;
+		}
+
 		if (num_byte == 0) {
+			if (key > 100000)
+				exit(-1);
 			Disconnect(key);
 			continue;
 		}  // 클라이언트가 closesocket을 했을 경우		
@@ -308,32 +228,32 @@ void do_worker()
 			char* p = over_ex->net_buf;
 			int remain = num_byte;
 			int packet_size;
-			int prev_packet_size = clients[key]->prev_packet_size;
+			int prev_packet_size = netinfo->prev_packet_size;
 			if (0 == prev_packet_size)
 				packet_size = 0;
-			else packet_size = clients[key]->pre_net_buf[0];
+			else packet_size = netinfo->pre_net_buf[0];
 			while (remain > 0) {
 				if (0 == packet_size) packet_size = p[0];
 				int required = packet_size - prev_packet_size;
 				if (required <= remain) {
-					memcpy(clients[key]->pre_net_buf + prev_packet_size, p, required);
-					ProcessPacket(key, clients[key]->pre_net_buf);
+					memcpy(netinfo->pre_net_buf + prev_packet_size, p, required);
+					ProcessPacket(key, netinfo->pre_net_buf);
 					remain -= required;
 					p += required;
 					prev_packet_size = 0;
 					packet_size = 0;
 				}
 				else {
-					memcpy(clients[key]->pre_net_buf + prev_packet_size, p, remain);
+					memcpy(netinfo->pre_net_buf + prev_packet_size, p, remain);
 					prev_packet_size += remain;
 					remain = 0;
 				}
 			}
-			clients[key]->prev_packet_size = prev_packet_size;
+			netinfo->prev_packet_size = prev_packet_size;
 
 			DWORD flags = 0;
 			memset(&over_ex->over, 0x00, sizeof(WSAOVERLAPPED));
-			WSARecv(client_s, over_ex->wsabuf, 1, 0, &flags, &over_ex->over, 0);
+			WSARecv(netinfo->socket, over_ex->wsabuf, 1, 0, &flags, &over_ex->over, 0);
 		}
 		else if (EV_SEND == over_ex->event_type) {
 			delete over_ex;
@@ -355,8 +275,10 @@ int main()
 		Enable_Client_ids.push(i);
 	}
 
+	g_iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, NULL, 0);
+
 	// 서버 연결
-	for (int i = 0; i < MAX_SERVER; ++i) {
+	for (int i = 0; i < 2; ++i) {
 		SOCKADDR_IN s_address;
 		SOCKET s2f_sock = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
 		memset(&s_address, 0, sizeof(s_address));
@@ -370,18 +292,18 @@ int main()
 		}
 
 		ZoneServerList[i].serverId = 200'000 + i;
-		ZoneServerList[i].socket = s2f_sock;
-		ZoneServerList[i].prev_packet_size = 0;
-		ZoneServerList[i].recv_over.wsabuf[0].len = MAX_BUFFER;
-		ZoneServerList[i].recv_over.wsabuf[0].buf = ZoneServerList[i].recv_over.net_buf;
-		ZoneServerList[i].recv_over.event_type = EV_RECV;
+		ZoneServerList[i].netinfo.socket = s2f_sock;
+		ZoneServerList[i].netinfo.prev_packet_size = 0;
+		ZoneServerList[i].netinfo.recv_over.wsabuf[0].len = MAX_BUFFER;
+		ZoneServerList[i].netinfo.recv_over.wsabuf[0].buf = ZoneServerList[i].netinfo.recv_over.net_buf;
+		ZoneServerList[i].netinfo.recv_over.event_type = EV_RECV;
 
 		CreateIoCompletionPort(reinterpret_cast<HANDLE>(s2f_sock), g_iocp, ZoneServerList[i].serverId, 0);
 
-		memset(&ZoneServerList[i].recv_over.over, 0, sizeof(ZoneServerList[i].recv_over.over));
+		memset(&ZoneServerList[i].netinfo.recv_over.over, 0, sizeof(ZoneServerList[i].netinfo.recv_over.over));
 		DWORD flags = 0;
-		int ret = WSARecv(s2f_sock, ZoneServerList[i].recv_over.wsabuf, 1, NULL,
-			&flags, &(ZoneServerList[i].recv_over.over), NULL);
+		int ret = WSARecv(s2f_sock, ZoneServerList[i].netinfo.recv_over.wsabuf, 1, NULL,
+			&flags, &(ZoneServerList[i].netinfo.recv_over.over), NULL);
 		if (0 != ret) {
 			int err_no = WSAGetLastError();
 			if (WSA_IO_PENDING != err_no)
@@ -406,12 +328,12 @@ int main()
 	memset(&clientAddr, 0, addrLen);
 	DWORD flags;
 
-	g_iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, NULL, 0);
+	
 	vector <thread> worker_threads;
 	for (int i = 0; i < 4; ++i) worker_threads.emplace_back(do_worker);
 
 	cout << "Start Client Listen\n" << flush;
-
+	int i = 0; 
 	while (true) {
 		SOCKET clientSocket = accept(listenSocket, (struct sockaddr*)&clientAddr, &addrLen);
 		if (INVALID_SOCKET == clientSocket) {
@@ -422,29 +344,32 @@ int main()
 
 		int user_id = new_user_id++;
 
-		if (false == Enable_Client_ids.try_pop(user_id)) {
-			cout << "Currently Max User\n";
-			continue;
-		}
+		//if (false == Enable_Client_ids.try_pop(user_id)) {
+		//	cout << "Currently Max User\n";
+		//	continue;
+		//}
 
 		SOCKETINFO* new_player = new SOCKETINFO;
-		new_player->id = user_id;
-		new_player->socket = clientSocket;
-		new_player->prev_packet_size = 0;
-		new_player->recv_over.wsabuf[0].len = MAX_BUFFER;
-		new_player->recv_over.wsabuf[0].buf = new_player->recv_over.net_buf;
-		new_player->recv_over.event_type = EV_RECV;
+		new_player->netinfo.socket = clientSocket;
+		new_player->netinfo.prev_packet_size = 0;
+		new_player->netinfo.recv_over.wsabuf[0].len = MAX_BUFFER;
+		new_player->netinfo.recv_over.wsabuf[0].buf = new_player->netinfo.recv_over.net_buf;
+		new_player->netinfo.recv_over.event_type = EV_RECV;
 		new_player->is_connected = false;
-		new_player->serverId = rand() % 2;
+		new_player->serverId = (i++) % 2;
+		//new_player->serverId = rand() % 2;
+		new_player->id = user_id + (MAX_USER_PER_SERVER * new_player->serverId);
 
-		clients.insert(make_pair(user_id, new_player));
+		clients[new_player->id] = new_player;
 
-		CreateIoCompletionPort(reinterpret_cast<HANDLE>(clientSocket), g_iocp, user_id, 0);
+		//clients.insert(make_pair(user_id, new_player));
 
-		memset(&clients[user_id]->recv_over.over, 0, sizeof(clients[user_id]->recv_over.over));
+		CreateIoCompletionPort(reinterpret_cast<HANDLE>(clientSocket), g_iocp, new_player->id, 0);
+
+		memset(&clients[new_player->id]->netinfo.recv_over.over, 0, sizeof(clients[new_player->id]->netinfo.recv_over.over));
 		flags = 0;
-		int ret = WSARecv(clientSocket, clients[user_id]->recv_over.wsabuf, 1, NULL,
-			&flags, &(clients[user_id]->recv_over.over), NULL);
+		int ret = WSARecv(clientSocket, clients[new_player->id]->netinfo.recv_over.wsabuf, 1, NULL,
+			&flags, &(clients[new_player->id]->netinfo.recv_over.over), NULL);
 		if (0 != ret) {
 			int err_no = WSAGetLastError();
 			if (WSA_IO_PENDING != err_no)

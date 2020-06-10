@@ -14,6 +14,8 @@ constexpr int MAX_STR_LEN = 255;
 #define SERVER_PORT			9000
 #define INTER_SERVER_PORT	9010
 
+#define MAX_USER_PER_SERVER 1000
+
 #define C2S_LOGIN	1
 #define C2S_MOVE	2
 
@@ -32,13 +34,13 @@ constexpr int MAX_STR_LEN = 255;
 struct ss_packet_connect {
 	unsigned char size;
 	unsigned char type;
-	char serverid;
+	int serverid;
 };
 
 struct ss_packet_disconnect {
 	unsigned char size;
 	unsigned char type;
-	char clientid;
+	int clientid;
 };
 
 struct ss_packet_client_connect {
@@ -70,6 +72,8 @@ struct sc_packet_login_ok {
 	short level;
 	int	exp;
 	int serverid;
+
+	int recvid;
 };
 
 // sc_packet_pos
@@ -79,6 +83,8 @@ struct sc_packet_move {
 	int id;
 	short x, y;
 	int move_time;
+
+	int recvid;
 };
 
 // sc_packet_put_object
@@ -89,6 +95,8 @@ struct sc_packet_enter {
 	char name[MAX_ID_LEN];
 	char o_type;
 	short x, y;
+
+	int recvid;
 };
 
 // sc_packet_remove
@@ -96,22 +104,7 @@ struct sc_packet_leave {
 	unsigned char size;
 	unsigned char type;
 	int id;
-};
 
-struct fs_packet_client_login_ok {
-	sc_packet_login_ok p;
-	int recvid;
-};
-struct fs_packet_client_move {
-	sc_packet_move p;
-	int recvid;
-};
-struct fs_packet_client_enter {
-	sc_packet_enter p;
-	int recvid;
-};
-struct fs_packet_client_leave {
-	sc_packet_leave p;
 	int recvid;
 };
 
@@ -125,6 +118,7 @@ struct cs_packet_login {
 	unsigned char	size;
 	unsigned char	type;
 	char	name[MAX_ID_LEN];
+	int		sender;
 };
 
 struct cs_packet_move {
@@ -132,6 +126,6 @@ struct cs_packet_move {
 	unsigned char	type;
 	char	direction;
 	int		move_time;
+	int		sender;
 };
-
 #pragma pack (pop)
