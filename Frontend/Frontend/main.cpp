@@ -5,6 +5,8 @@
 #include <mutex>
 #include <chrono>
 #include <queue>
+#include <fstream>
+#include <string>
 #include <concurrent_unordered_map.h>
 #include <concurrent_queue.h>
 
@@ -20,6 +22,13 @@ constexpr int MAX_SERVER = 2;
 
 
 enum EVENT_TYPE { EV_RECV, EV_SEND, EV_MOVE, EV_PLAYER_MOVE_NOTIFY, EV_MOVE_TARGET, EV_ATTACK, EV_HEAL };
+
+struct ServerNetInfo {
+	int id = -1;
+	string ip = "";
+	int port1 = -1;
+	int port2 = -1;
+};
 
 struct OVER_EX {
 	WSAOVERLAPPED over;
@@ -64,6 +73,8 @@ Concurrency::concurrent_queue<int> Enable_Client_ids;
 ServerInfo ZoneServerList[2];
 HANDLE	g_iocp;
 
+ServerNetInfo ServerNetInfoList[3];
+
 int new_user_id = 0;
 
 void error_display(const char* msg, int err_no)
@@ -79,6 +90,22 @@ void error_display(const char* msg, int err_no)
 	wcout << L"에러 " << lpMsgBuf << endl;
 	while (true);
 	LocalFree(lpMsgBuf);
+}
+
+void SetServerNetInfo() {
+	string in_line;
+	ifstream in("../../Config.txt");
+
+	int i = 0;
+	while (!in.eof()) {
+		in >> ServerNetInfoList[i].id;
+		in >> ServerNetInfoList[i].ip;
+		in >> ServerNetInfoList[i].port1;
+		in >> ServerNetInfoList[i].port2;
+		i++;
+	}
+
+	in.close();
 }
 
 void Disconnect(int id);
@@ -134,13 +161,16 @@ void send_packet(SOCKET s, void* buff)
 void Disconnect(int id)
 {
 	cout << "Disconnect" << endl;
-	//clients[id]->is_connected = false;
-	//closesocket(clients[id]->socket);
-	//for (auto& cl : clients) {
-	//	if (true == cl->is_connected) {
-	//
-	//	}
-	//}
+	if (clients[id]->is_connected) {
+		clients[id]->is_connected = false;
+		closesocket(clients[id]->netinfo.socket);
+		fs_packet_client_disconn p;
+		p.disconnid = id;
+		p.size = sizeof(p);
+		p.type = F2S_CLIENTDISCONN;
+
+		send_packet(ZoneServerList[clients[id]->serverId].netinfo.socket, &p);
+	}
 }
 
 void ProcessPacket(int id, void* buff)
@@ -225,7 +255,9 @@ void do_worker()
 		if (num_byte == 0) {
 			if (key > 100000)
 				exit(-1);
-			Disconnect(key);
+			else if (key < 100000) {
+				Disconnect(key);
+			}
 			continue;
 		}  // 클라이언트가 closesocket을 했을 경우		
 
@@ -277,6 +309,8 @@ int main()
 	WSADATA WSAData;
 	WSAStartup(MAKEWORD(2, 2), &WSAData);
 
+	SetServerNetInfo();
+
 	for (int i = 0; i < MAX_USER_PER_SERVER * 2; ++i) {
 		Enable_Client_ids.push(i);
 	}
@@ -289,8 +323,8 @@ int main()
 		SOCKET s2f_sock = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
 		memset(&s_address, 0, sizeof(s_address));
 		s_address.sin_family = AF_INET;
-		s_address.sin_port = htons(SERVER_PORT + i);
-		inet_pton(AF_INET, "127.0.0.1", &s_address.sin_addr);
+		s_address.sin_port = htons(ServerNetInfoList[i].port2);
+		inet_pton(AF_INET, ServerNetInfoList[i].ip.c_str(), &s_address.sin_addr);
 
 		int Result = WSAConnect(s2f_sock, (sockaddr*)&s_address, sizeof(s_address), NULL, NULL, NULL, NULL);
 		if (0 != Result) {
@@ -323,7 +357,7 @@ int main()
 	SOCKADDR_IN serverAddr;
 	memset(&serverAddr, 0, sizeof(SOCKADDR_IN));
 	serverAddr.sin_family = AF_INET;
-	serverAddr.sin_port = htons(SERVER_PORT+100);
+	serverAddr.sin_port = htons(ServerNetInfoList[2].port1);
 	serverAddr.sin_addr.S_un.S_addr = htonl(INADDR_ANY);
 	if (SOCKET_ERROR == ::bind(listenSocket, (struct sockaddr*)&serverAddr, sizeof(SOCKADDR_IN))) {
 		error_display("WSARecv Error :", WSAGetLastError());

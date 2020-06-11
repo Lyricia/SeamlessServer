@@ -25,13 +25,11 @@ enum ENUMOP { OP_RECV, OP_SEND, OP_ACCEPT };
 enum C_STATUS { ST_FREE, ST_ALLOC, ST_ACTIVE, ST_HANDOVER };
 
 struct ServerNetInfo {
-	int id;
-	string ip;
-	int port1;
-	int port2;
+	int id = -1;
+	string ip = "";
+	int port1 = -1;
+	int port2 = -1;
 };
-
-
 
 struct EXOVER {
 	WSAOVERLAPPED	over;
@@ -71,6 +69,8 @@ struct CLIENT : Base_Info {
 	unordered_set<int> view_list;
 	mutex view_list_lock;
 
+	int		move_time;
+
 	short x, y;
 	char m_name[MAX_ID_LEN + 1]{};
 };
@@ -93,12 +93,16 @@ Base_Info other_server_info;
 Base_Info frontend_server_info;
 
 int server_buffer_pos = -1;
-int Server_Start_X = -1;
-int Server_Start_Y = -1;
+
+void disconnect(int user_id);
 
 void SetServerNetInfo() {
 	string in_line;
-	ifstream in("Config.txt");
+	ifstream in("../../Config.txt");
+
+	if (!in.is_open()) {
+		cout << "config File Read Error" << endl;
+	}
 
 	int i = 0;
 	while (!in.eof()) {
@@ -139,7 +143,6 @@ bool is_near(int a, int b, bool IsOpponentProxy)
 {
 	if (VIEW_RANGE < abs(g_clients[a].x - g_clients[b].x)) return false;
 	if (VIEW_RANGE < abs(g_clients[a].y - g_clients[b].y)) return false;
-	if (VIEW_RANGE < abs(g_clients[a].y - g_clients[b].y)) return false;
 	return true;
 }
 
@@ -149,11 +152,11 @@ int getProxyClientID(int id, int serverid) {
 
 bool IsInServerBufferSection(int y) {
 	if (g_my_server_id == 0 &&
-		(21) >= y && y > server_buffer_pos) {
+		(199 + 2) >= y && y > server_buffer_pos) {
 		return true;
 	}
-	else if (g_my_server_id == 1 && 
-		(18) <= y && y < server_buffer_pos) {
+	else if (g_my_server_id == 1 &&
+		(200 - 2) <= y && y < server_buffer_pos) {
 		return true;
 	}
 	return false;
@@ -170,10 +173,10 @@ bool IsOutServerBufferSection(int y) {
 }
 
 bool IsHandOver(int y) {
-	if (g_my_server_id == 0 && y > 21) {
+	if (g_my_server_id == 0 && y > 199 + 2) {
 		return true;
 	}
-	else if (g_my_server_id == 1 && y < 18) {
+	else if (g_my_server_id == 1 && y < 200 - 2) {
 		return true;
 	}
 	return false;
@@ -226,7 +229,9 @@ void send_server_packet(SOCKET& s, void* p)
 			if (WSA_IO_PENDING != err_no)
 				error_display("WSASend Error :", err_no);
 	}
+#ifdef _DEBUG
 	printf("send serv %ld, [%d]\n", s, buf[1]);
+#endif
 	//cout << "send server packet to : " << s_other_server << endl;
 }
 
@@ -249,8 +254,9 @@ void send_login_ok_packet(CLIENT& cl)
 	//msg.recvid = g_clients[user_id].m_id;
 
 	send_server_packet(frontend_server_info.m_socket, &p);
-
+#ifdef _DEBUG
 	printf("recver %d, target %d\n", p.recvid, p.id);
+#endif
 	//send_client_packet(user_id, &p);
 }
 
@@ -295,9 +301,10 @@ void send_leave_packet(int user_id, int leaverid)
 	p.type = S2C_LEAVE;
 	p.recvid = user.m_id;
 
+#ifdef _DEBUG
 	cout << "leave" << endl;
 	//while (true);
-
+#endif
 	send_server_packet(frontend_server_info.m_socket, &p);
 	//send_client_packet(user_id, &p);
 
@@ -318,7 +325,8 @@ void send_move_packet(CLIENT& user, int moverid, bool isMoverProxy)
 	p.x = cl_mover->x;
 	p.y = cl_mover->y;
 	p.recvid = user.m_id;
-
+	
+	p.move_time = user.move_time;
 
 	send_server_packet(frontend_server_info.m_socket, &p);
 
@@ -488,7 +496,7 @@ void do_move(CLIENT& u, int direction)
 			u.view_list_lock.lock();
 			auto vl = u.view_list;
 			u.view_list_lock.unlock();
-			
+
 			for (auto cl : vl) {
 				p3.recvid = cl;
 				send_server_packet(frontend_server_info.m_socket, &p3);
@@ -500,21 +508,22 @@ void do_move(CLIENT& u, int direction)
 			p.clientid = u.m_id;
 
 			send_server_packet(other_server_info.m_socket, &p);
-			
+
 
 			sf_packet_handver p2;
 			p2.size = sizeof(p2);
 			p2.type = S2F_HANDOVER;
 			p2.targetid = u.m_id;
 			p2.handoverserverid = g_other_server_id;
-			
+
 			send_server_packet(frontend_server_info.m_socket, &p2);
 
-			
+
 		}
 	}
-
+#ifdef _DEBUG
 	printf("client [%d]moved [%d]dir : (%d, %d)\n", u.m_id, direction, u.x, u.y);
+#endif
 }
 
 void enter_game(CLIENT& newclient, char name[])
@@ -522,7 +531,7 @@ void enter_game(CLIENT& newclient, char name[])
 	newclient.m_cl.lock();
 	strcpy_s(newclient.m_name, name);
 	newclient.m_name[MAX_ID_LEN] = NULL;
-	
+
 	newclient.m_ServerID = g_my_server_id + SS_ACCEPT_TAG;
 
 	send_login_ok_packet(newclient);
@@ -558,8 +567,9 @@ void enter_game(CLIENT& newclient, char name[])
 
 	newclient.m_status = ST_ACTIVE;
 	newclient.m_cl.unlock();
-
+#ifdef _DEBUG
 	printf("client %d Connected\n", newclient.m_id);
+#endif
 
 	if (true == Is_Other_Server_Connected)
 		if (IsInServerBufferSection(newclient.y)) {
@@ -604,7 +614,7 @@ void Process_Proxy_Client_Move(int proxyid) {
 			send_move_packet(cl, proxyid, true);
 			new_proxy_vl.insert(localcl_id);
 		}
-		else 
+		else
 			send_leave_packet(cl.m_id, proxyid);
 	}
 
@@ -638,13 +648,12 @@ void process_packet(int key, char* buf)
 	case C2S_LOGIN: {
 		cs_packet_login* packet = reinterpret_cast<cs_packet_login*>(buf);
 		int user_idx = packet->sender;
-		
+
 		g_clients[user_idx].m_id = packet->sender;
 		g_clients[user_idx].m_list_slot_idx = packet->sender;
-		g_clients[user_idx].y = 19 + g_my_server_id;
 		g_clients[user_idx].x = rand() % WORLD_WIDTH;
-		//g_clients[user_idx].y = rand() % WORLD_HEIGHT;
-		//g_clients[user_idx].y = (rand() % (WORLD_HEIGHT/2)) + ((WORLD_HEIGHT/2) * g_my_server_id);
+		//g_clients[user_idx].y = 199 + g_my_server_id;
+		g_clients[user_idx].y = (rand() % (WORLD_HEIGHT/2)) + ((WORLD_HEIGHT/2) * g_my_server_id);
 
 		enter_game(g_clients[user_idx], packet->name);
 		break;
@@ -652,6 +661,7 @@ void process_packet(int key, char* buf)
 	case C2S_MOVE: {
 		cs_packet_move* packet = reinterpret_cast<cs_packet_move*>(buf);
 		//int user_id = packet->sender - (g_my_server_id * MAX_USER_PER_SERVER);
+		GetClientByID(packet->sender).move_time = packet->move_time;
 		do_move(GetClientByID(packet->sender), packet->direction);
 		break;
 	}
@@ -680,9 +690,10 @@ void process_packet(int key, char* buf)
 		nc->m_status = ST_ACTIVE;
 
 		//g_proxy_clients[proxy_id] = nc;
-
+#ifdef _DEBUG
 		printf("Client %d from %d Server - proxy", nc->m_id, nc->m_ServerID);
 		cout << nc->m_name << " connected\n";
+#endif
 
 		for (auto& cl : g_clients) {
 			if (ST_ACTIVE == cl.m_status) {
@@ -708,8 +719,9 @@ void process_packet(int key, char* buf)
 		proxycl.y = packet->y;
 
 		Process_Proxy_Client_Move(proxyid);
-
+#ifdef _DEBUG
 		printf("other server[%d] client [%d]moved to : (%d, %d)\n", proxycl.m_ServerID, proxycl.m_id, proxycl.x, proxycl.y);
+#endif
 		break;
 	}
 	case S2S_CLIENT_DISCONN: {
@@ -726,9 +738,10 @@ void process_packet(int key, char* buf)
 				send_leave_packet(cl.m_id, proxyid);
 			cl.m_cl.unlock();
 		}
-
+#ifdef _DEBUG
 		printf("Server %d proxy Client %d ", g_clients[clientid].m_ServerID, g_clients[clientid].m_id);
 		cout << g_clients[clientid].m_name << " disconnected\n";
+#endif
 		break;
 	}
 	case S2S_CLIENT_HANDOVER: {
@@ -747,11 +760,18 @@ void process_packet(int key, char* buf)
 
 		break;
 	}
+	case F2S_CLIENTDISCONN: {
+		fs_packet_client_disconn* packet = reinterpret_cast<fs_packet_client_disconn*>(buf);
+		disconnect(packet->disconnid);
+		break;
+	}
 	default:
 		cout << "Unknown Packet Type Error!\n";
 		DebugBreak();
 		exit(-1);
 	}
+
+
 	//printf("Recved [%d]user [%d]Packet\n", user_id, buf[1]);
 }
 
@@ -863,11 +883,11 @@ void Create_Server_Connection(SOCKET& other_server_socket, int other_server_id, 
 		SOCKADDR_IN ServerAddr;
 		ZeroMemory(&ServerAddr, sizeof(SOCKADDR_IN));
 		ServerAddr.sin_family = AF_INET;
-		ServerAddr.sin_port = htons(SERVER_PORT + 10 + g_other_server_id);
+		ServerAddr.sin_port = htons(ServerInfo[g_other_server_id].port1);
 
 		cout << SERVER_PORT + 10 + g_other_server_id << endl;
 
-		inet_pton(AF_INET, "127.0.0.1", &ServerAddr.sin_addr);
+		inet_pton(AF_INET, ServerInfo[g_other_server_id].ip.c_str(), &ServerAddr.sin_addr);
 
 		if (true == Is_Other_Server_Connected) return;
 		int Result = WSAConnect(other_server_socket, (sockaddr*)&ServerAddr, sizeof(ServerAddr), NULL, NULL, NULL, NULL);
@@ -993,7 +1013,10 @@ int main()
 	WSADATA WSAData;
 	WSAStartup(MAKEWORD(2, 2), &WSAData);
 
-	//SetServerNetInfo();
+	cout << "Server no (0, 1) : ";
+	cin >> g_my_server_id;
+
+	SetServerNetInfo();
 
 	g_iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, NULL, 0);
 
@@ -1003,21 +1026,15 @@ int main()
 	SOCKADDR_IN s_address;
 
 	int ret = 0;
-	int retry = 0;
-	while (true) {
-		s2s_listen_sock = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
-		memset(&s_address, 0, sizeof(s_address));
-		s_address.sin_family = AF_INET;
-		s_address.sin_port = htons(SERVER_PORT + 10 + g_my_server_id);
-		s_address.sin_addr.S_un.S_addr = htonl(INADDR_ANY);
-		ret = ::bind(s2s_listen_sock, reinterpret_cast<sockaddr*>(&s_address), sizeof(s_address));
-		if (ret != 0) g_my_server_id++;
-		if (ret == 0) break;
-		if (retry++ > 10) {
-			cout << "Server Init Failed" << endl;
-			return 0;
-		}
-	}
+
+	s2s_listen_sock = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
+	memset(&s_address, 0, sizeof(s_address));
+	s_address.sin_family = AF_INET;
+	s_address.sin_port = htons(ServerInfo[g_my_server_id].port1);
+	s_address.sin_addr.S_un.S_addr = htonl(INADDR_ANY);
+	ret = ::bind(s2s_listen_sock, reinterpret_cast<sockaddr*>(&s_address), sizeof(s_address));
+	if (ret != 0) g_my_server_id++;
+
 	cout << SERVER_PORT + 10 + g_my_server_id << endl;
 
 
@@ -1032,14 +1049,9 @@ int main()
 	printf("Server ID [%d]\n", g_my_server_id);
 
 	if (g_my_server_id == 0)
-		server_buffer_pos = 14;
+		server_buffer_pos = 199 - 5;
 	else if (g_my_server_id == 1)
-		server_buffer_pos = 25;
-
-	Server_Start_X = SESSION_WIDTH;// *g_my_server_id;
-	//Server_Start_Y = SESSION_HEIGHT * g_my_server_id;
-	Server_Start_Y = 0;
-
+		server_buffer_pos = 200 + 5;
 
 	// other Server Accept
 	SOCKET g_server2_socket = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);

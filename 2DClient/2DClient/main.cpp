@@ -4,6 +4,8 @@
 #include <iostream>
 #include <unordered_map>
 #include <chrono>
+#include <fstream>
+#include <string>
 using namespace std;
 using namespace chrono;
 
@@ -36,6 +38,31 @@ int g_myServerId;
 
 sf::RenderWindow* g_window;
 sf::Font g_font;
+
+struct ServerNetInfo {
+	int id = -1;
+	string ip = "";
+	int port1 = -1;
+	int port2 = -1;
+};
+
+ServerNetInfo ServerNetInfoList[3];
+
+void SetServerNetInfo() {
+	string in_line;
+	ifstream in("../../Config.txt");
+
+	int i = 0;
+	while (!in.eof()) {
+		in >> ServerNetInfoList[i].id;
+		in >> ServerNetInfoList[i].ip;
+		in >> ServerNetInfoList[i].port1;
+		in >> ServerNetInfoList[i].port2;
+		i++;
+	}
+
+	in.close();
+}
 
 class OBJECT {
 private:
@@ -296,7 +323,7 @@ void client_main()
 			int tile_y = j + g_top_y;
 			if ((tile_x < 0) || (tile_y < 0)) continue;
 			if (g_myServerId == 0) {
-				if (tile_y >= 20) {
+				if (tile_y >= 200) {
 					white_tile.setColor(sf::Color::Red);
 					black_tile.setColor(sf::Color::Red);
 				}
@@ -306,7 +333,7 @@ void client_main()
 				}
 			}
 			else {
-				if (tile_y < 20) {
+				if (tile_y < 200) {
 					white_tile.setColor(sf::Color::Red);
 					black_tile.setColor(sf::Color::Red);
 				}
@@ -355,7 +382,7 @@ void send_move_packet(unsigned char dir)
 	m_packet.size = sizeof(m_packet);
 	m_packet.direction = dir;
 	send_packet(&m_packet);
-}
+}	
 
 bool IsContained(sf::Vector2f lefttop, sf::Vector2f size, sf::Vector2i mouse) {
 	if (mouse.x < lefttop.x || lefttop.x + size.x < mouse.x) return false;
@@ -367,7 +394,7 @@ E_STATUS status = E_STATUS::SERVER_SELECT;
 
 void ServerConnect(int serverid) {
 	wcout.imbue(locale("korean"));
-	sf::Socket::Status sock = g_socket.connect("127.0.0.1", SERVER_PORT + 100);
+	sf::Socket::Status sock = g_socket.connect(ServerNetInfoList[2].ip.c_str(), ServerNetInfoList[2].port1);
 	g_socket.setBlocking(false);
 
 	if (sock != sf::Socket::Done) {
@@ -400,7 +427,7 @@ int main()
 {
 	int myserver = -1;
 	client_initialize();
-
+	SetServerNetInfo();
 	//cout << "choose server : ";
 	//cin >> myserver;
 	//cout << endl;
@@ -468,12 +495,12 @@ int main()
 
 				if (IsContained(shape1.getPosition(), sf::Vector2f(shape1.getRadius() * 2, shape1.getRadius() * 2), mousepos)) {
 					shape1.setFillColor(sf::Color::Yellow);
-					myserver = 0;
+					//myserver = 0;
 					ServerConnect(myserver);
 				}
 				else if (IsContained(shape2.getPosition(), sf::Vector2f(shape2.getRadius() * 2, shape2.getRadius() * 2), mousepos)) {
 					shape2.setFillColor(sf::Color::Yellow);
-					myserver = 1;
+					//myserver = 1;
 					ServerConnect(myserver);
 				}
 			}

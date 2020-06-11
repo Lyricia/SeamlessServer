@@ -3,18 +3,18 @@
 constexpr int MAX_ID_LEN = 50;
 constexpr int MAX_STR_LEN = 255;
 
-#define WORLD_WIDTH		20
-#define WORLD_HEIGHT	40
+#define WORLD_WIDTH		400
+#define WORLD_HEIGHT	400
 
 #define SESSION_WIDTH		20
 #define SESSION_HEIGHT		20
 
-#define VIEW_RANGE		5
+#define VIEW_RANGE		7
 
 #define SERVER_PORT			9000
 #define INTER_SERVER_PORT	9010
 
-#define MAX_USER_PER_SERVER 1000
+#define MAX_USER_PER_SERVER 6000
 
 #define C2S_LOGIN	1
 #define C2S_MOVE	2
@@ -25,6 +25,7 @@ constexpr int MAX_STR_LEN = 255;
 #define S2C_LEAVE			14
 
 #define S2F_HANDOVER		20
+#define F2S_CLIENTDISCONN	21
 
 #define S2S_CONN			30
 #define S2S_CLIENT_DISCONN	31
@@ -73,6 +74,12 @@ struct sf_packet_handver {
 	unsigned char type;
 	int targetid;
 	int handoverserverid;
+};
+
+struct fs_packet_client_disconn {
+	unsigned char size;
+	unsigned char type;
+	int disconnid;
 };
 
 
