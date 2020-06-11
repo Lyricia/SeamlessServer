@@ -24,10 +24,13 @@ constexpr int MAX_STR_LEN = 255;
 #define S2C_ENTER			13
 #define S2C_LEAVE			14
 
+#define S2F_HANDOVER		20
+
 #define S2S_CONN			30
 #define S2S_CLIENT_DISCONN	31
 #define S2S_CLIENT_CONN		32
 #define S2S_CLIENT_MOVE		33
+#define S2S_CLIENT_HANDOVER	34
 
 #pragma pack(push ,1)
 
@@ -58,6 +61,20 @@ struct ss_packet_client_move {
 	int clientid;
 	short x, y;
 };
+
+struct ss_packet_client_handover {
+	unsigned char size;
+	unsigned char type;
+	int clientid;
+};
+
+struct sf_packet_handver {
+	unsigned char size;
+	unsigned char type;
+	int targetid;
+	int handoverserverid;
+};
+
 
 constexpr unsigned char O_PLAYER = 0;
 constexpr unsigned char O_PROXY = 1;

@@ -58,8 +58,8 @@ struct ServerInfo
 	int		serverId;
 };
 
-//SOCKETINFO* clients[MAX_USER_PER_SERVER * MAX_SERVER];
-concurrency::concurrent_unordered_map<int, SOCKETINFO*> clients;
+SOCKETINFO* clients[MAX_USER_PER_SERVER * MAX_SERVER];
+//concurrency::concurrent_unordered_map<int, SOCKETINFO*> clients;
 Concurrency::concurrent_queue<int> Enable_Client_ids;
 ServerInfo ZoneServerList[2];
 HANDLE	g_iocp;
@@ -179,6 +179,12 @@ void ProcessPacket(int id, void* buff)
 	case S2C_LEAVE:	{
 		auto msg = reinterpret_cast<sc_packet_leave*>(buff);
 		send_packet(msg->recvid, msg);
+		break;
+	}
+
+	case S2F_HANDOVER: {
+		auto msg = reinterpret_cast<sf_packet_handver*>(buff);
+		clients[msg->targetid]->serverId = msg->handoverserverid;
 		break;
 	}
 
@@ -344,10 +350,10 @@ int main()
 
 		int user_id = new_user_id++;
 
-		//if (false == Enable_Client_ids.try_pop(user_id)) {
-		//	cout << "Currently Max User\n";
-		//	continue;
-		//}
+		if (false == Enable_Client_ids.try_pop(user_id)) {
+			cout << "Currently Max User\n";
+			continue;
+		}
 
 		SOCKETINFO* new_player = new SOCKETINFO;
 		new_player->netinfo.socket = clientSocket;
@@ -356,9 +362,10 @@ int main()
 		new_player->netinfo.recv_over.wsabuf[0].buf = new_player->netinfo.recv_over.net_buf;
 		new_player->netinfo.recv_over.event_type = EV_RECV;
 		new_player->is_connected = false;
+		//new_player->serverId = 0;
 		new_player->serverId = (i++) % 2;
 		//new_player->serverId = rand() % 2;
-		new_player->id = user_id + (MAX_USER_PER_SERVER * new_player->serverId);
+		new_player->id = user_id;
 
 		clients[new_player->id] = new_player;
 
